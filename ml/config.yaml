@@ -1,0 +1,82 @@
+# Model configurations
+models:
+  yolo:
+    version: "v8x"
+    input_size: [640, 640]
+    confidence_threshold: 0.25
+    nms_threshold: 0.45
+    batch_size: 16
+    classes: ["person", "bicycle", "car", "motorcycle", "bus", "truck"]
+  
+  faster_rcnn:
+    backbone: "resnet50"
+    anchor_sizes: [32, 64, 128, 256, 512]
+    rpn_pre_nms_top_n: 2000
+    rpn_post_nms_top_n: 1000
+    rpn_nms_threshold: 0.7
+    classes: ["person", "car", "truck", "bus", "motorcycle"]
+
+# Training settings
+training:
+  batch_size: 16
+  epochs: 10
+  learning_rate: 0.001
+  optimizer: "adam"
+  validation_split: 0.2
+  early_stopping_patience: 10
+
+# Data preprocessing
+preprocessing:
+  image_size: [640, 640]
+  augmentation:
+    horizontal_flip: true
+    vertical_flip: false
+    rotation_range: 20
+    brightness_range: [0.8, 1.2]
+    contrast_range: [0.8, 1.2]
+
+# Cloud settings
+cloud:
+  aws:
+    region: "us-east-1"
+    instance_type: "ml.p3.2xlarge"
+    bucket: "object-detection-data"
+  
+  azure:
+    location: "eastus"
+    vm_size: "Standard_NC6"
+    container: "object-detection-data"
+  
+  gcp:
+    region: "us-central1"
+    machine_type: "n1-standard-8"
+    accelerator: "NVIDIA_TESLA_T4"
+    bucket: "object-detection-data"
+
+# MLOps configuration
+mlops:
+  experiment_tracking:
+    mlflow_tracking_uri: "http://localhost:5000"
+    wandb_project: "object-detection-flow"
+  
+  deployment:
+    docker_registry: "your-registry"
+    kubernetes_namespace: "object-detection"
+    min_replicas: 1
+    max_replicas: 5
+
+# Monitoring
+monitoring:
+  metrics:
+    - precision
+    - recall
+    - mAP50
+    - mAP50-95
+    - inference_time
+    - gpu_utilization
+    - memory_usage
+  
+  alerts:
+    accuracy_threshold: 0.85
+    latency_threshold_ms: 100
+    error_rate_threshold: 0.01 
