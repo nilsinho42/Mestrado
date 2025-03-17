@@ -285,7 +285,7 @@ _****_
 
 ```diff
 - 
-+ module github.com/yourusername/object-detection-flow
++ module github.com/nilsinho42/Mestrado
 + 
 + go 1.19
 + 
@@ -2867,8 +2867,8 @@ _****_
 + 	_ "github.com/lib/pq"
   	"go.uber.org/zap"
 + 
-+ 	"github.com/yourusername/object-detection-flow/backend/db"
-+ 	"github.com/yourusername/object-detection-flow/backend/middleware"
++ 	"github.com/nilsinho42/Mestrado/backend/db"
++ 	"github.com/nilsinho42/Mestrado/backend/middleware"
   )
 + 
 + var database *sql.DB
@@ -3318,7 +3318,7 @@ _****_
   	"go.uber.org/zap"
 + 	"golang.org/x/crypto/bcrypt"
   
-  	"github.com/yourusername/object-detection-flow/backend/db"
+  	"github.com/nilsinho42/Mestrado/backend/db"
   	Password string `json:"password" binding:"required"`
   }
 + 
@@ -8291,8 +8291,8 @@ You're right - I should add a detailed setup and usage guide. Let me add that to
 ### Clone and Configure Repository
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/object-detection-flow
-cd object-detection-flow
+git clone https://github.com/nilsinho42/Mestrado
+cd Mestrado
 
 # Create and activate virtual environment
 python -m venv venv

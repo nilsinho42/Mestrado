@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 var jwtKey = []byte(os.Getenv("JWT_SECRET"))
@@ -15,7 +15,7 @@ var jwtKey = []byte(os.Getenv("JWT_SECRET"))
 type Claims struct {
 	UserID int64  `json:"user_id"`
 	Role   string `json:"role"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
 
 // GenerateToken creates a new JWT token for a user
@@ -24,8 +24,8 @@ func GenerateToken(userID int64, role string) (string, error) {
 	claims := &Claims{
 		UserID: userID,
 		Role:   role,
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: expirationTime.Unix(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
 		},
 	}
 
@@ -99,4 +99,4 @@ func RequireRole(role string) gin.HandlerFunc {
 
 		c.Next()
 	}
-} 
+}

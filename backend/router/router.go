@@ -1,49 +1,73 @@
 package router
 
 import (
-	"github.com/gorilla/mux"
-	"gorm.io/gorm"
-	"your-project/controllers"
+	"database/sql"
+
+	"github.com/gin-gonic/gin"
+	"github.com/nilsinho42/Mestrado/controllers"
+	"github.com/nilsinho42/Mestrado/middleware"
 )
 
-func SetupRouter(db *gorm.DB) *mux.Router {
-	r := mux.NewRouter()
+func SetupRouter(db *sql.DB) *gin.Engine {
+	// Initialize handlers
+	controllers.InitHandlers(db, nil) // TODO: Pass logger
 
-	// Initialize controllers
-	locationController := controllers.NewLocationController(db)
+	r := gin.New()
 
-	// Location routes
-	r.HandleFunc("/api/locations", locationController.GetLocations).Methods("GET")
-	r.HandleFunc("/api/locations/{id}", locationController.GetLocation).Methods("GET")
-	r.HandleFunc("/api/locations", locationController.CreateLocation).Methods("POST")
-	r.HandleFunc("/api/locations/{id}/metrics", locationController.UpdateLocationMetrics).Methods("PATCH")
-	r.HandleFunc("/api/locations/{id}", locationController.DeleteLocation).Methods("DELETE")
+	// Global middleware
+	r.Use(gin.Recovery())
+	r.Use(middleware.CORS())
+	r.Use(gin.Logger())
 
-	// Add middleware
-	r.Use(corsMiddleware)
-	r.Use(jsonMiddleware)
+	// Initialize rate limiters
+	globalRateLimiter := middleware.NewRateLimiter(100, 100)  // 100 requests per second
+	detectionRateLimiter := middleware.NewRateLimiter(10, 10) // 10 requests per second
+
+	// Public routes
+	public := r.Group("/api")
+	{
+		public.POST("/login", controllers.HandleLogin)
+		public.POST("/register", controllers.HandleRegister)
+	}
+
+	// Protected routes
+	protected := r.Group("/api")
+	protected.Use(middleware.AuthMiddleware())
+	protected.Use(globalRateLimiter.RateLimit())
+	{
+		// Location routes
+		protected.GET("/locations", controllers.HandleListLocations)
+		protected.POST("/locations", controllers.HandleCreateLocation)
+		protected.GET("/locations/:id", controllers.HandleGetLocation)
+		protected.PUT("/locations/:id", controllers.HandleUpdateLocation)
+		protected.DELETE("/locations/:id", controllers.HandleDeleteLocation)
+
+		// Detection routes
+		detections := protected.Group("/detections")
+		detections.Use(detectionRateLimiter.RateLimit())
+		{
+			detections.POST("/analyze", controllers.HandleAnalyzeImage)
+			detections.GET("/stats", controllers.HandleGetStats)
+		}
+
+		// Model routes
+		models := protected.Group("/models")
+		{
+			models.GET("", controllers.HandleListModels)
+			models.POST("", controllers.HandleRegisterModel)
+			models.GET("/compare", controllers.HandleCompareModels)
+			models.GET("/:id/metrics", controllers.HandleGetModelMetrics)
+			models.PUT("/:id", controllers.HandleUpdateModel)
+			models.POST("/:id/deploy", controllers.HandleDeployModel)
+		}
+
+		// Cloud routes
+		cloud := protected.Group("/cloud")
+		{
+			cloud.GET("/costs", controllers.HandleGetCloudCosts)
+			cloud.GET("/performance", controllers.HandleGetCloudPerformance)
+		}
+	}
 
 	return r
 }
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-func jsonMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		next.ServeHTTP(w, r)
-	})
-} 
