@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 from pathlib import Path
 import time
+from threading import Thread
+from queue import Queue
 
 class YOLODetector:
     def __init__(self, config):
@@ -14,7 +16,7 @@ class YOLODetector:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Initialize YOLO model with pre-trained weights
-        self.model = YOLO('yolov8x.pt')
+        self.model = YOLO('yolov8n.pt')  # Using smaller model for better performance
         
         # Define class mappings for different datasets
         self.class_mappings = {
@@ -34,58 +36,24 @@ class YOLODetector:
         self.model.conf = self.config["confidence_threshold"]
         self.model.iou = self.config["nms_threshold"]
         
-    def train_on_bdd100k(self, data_yaml_path, epochs):
-        """Fine-tune on BDD100K for vehicle detection."""
-        vehicle_classes = [self.class_mappings['bdd100k'][c] for c in 
-                         ['car', 'bus', 'truck', 'motorcycle', 'bicycle']]
+        # Initialize frame processing queue
+        self.frame_queue = Queue(maxsize=2)
+        self.result_queue = Queue(maxsize=2)
         
-        return self.model.train(
-            data=data_yaml_path,
-            epochs=epochs,
-            imgsz=self.config["input_size"][0],
-            batch=self.config["batch_size"],
-            device=self.device,
-            classes=vehicle_classes,
-            val=True,
-            plots=True
-        )
-    
-    def train_on_citypersons(self, data_yaml_path, epochs):
-        """Fine-tune on CityPersons for pedestrian detection."""
-        person_class = [self.class_mappings['citypersons']['person']]
+    def process_frame(self, frame):
+        """Process a single frame."""
+        # Resize frame for faster processing
+        frame = cv2.resize(frame, (640, 480))
         
-        return self.model.train(
-            data=data_yaml_path,
-            epochs=epochs,
-            imgsz=self.config["input_size"][0],
-            batch=self.config["batch_size"],
-            device=self.device,
-            classes=person_class,
-            val=True,
-            plots=True
-        )
-    
-    def evaluate(self, data_yaml_path, dataset_type):
-        """Evaluate the model on specified dataset."""
-        classes = None
-        if dataset_type == 'bdd100k':
-            classes = [self.class_mappings['bdd100k'][c] for c in 
-                      ['car', 'bus', 'truck', 'motorcycle', 'bicycle']]
-        elif dataset_type == 'citypersons':
-            classes = [self.class_mappings['citypersons']['person']]
-            
-        results = self.model.val(
-            data=data_yaml_path,
-            classes=classes
-        )
+        # Perform inference
+        results = self.model.predict(
+            source=frame,
+            conf=self.config["confidence_threshold"],
+            iou=self.config["nms_threshold"],
+            verbose=False
+        )[0]
         
-        metrics = {
-            "precision": results.results_dict["metrics/precision(B)"],
-            "recall": results.results_dict["metrics/recall(B)"],
-            "mAP50": results.results_dict["metrics/mAP50(B)"],
-            "mAP50-95": results.results_dict["metrics/mAP50-95(B)"]
-        }
-        return metrics
+        return results, frame
     
     def process_video_stream(self, source=0, display=True, save_path=None):
         """
@@ -122,22 +90,26 @@ class YOLODetector:
         total_persons = 0
         start_time = time.time()
         
+        # Set lower resolution for webcam
+        if source == 0:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        
         try:
             while cap.isOpened():
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                # Perform inference
-                results = self.model.predict(
-                    source=frame,
-                    conf=self.config["confidence_threshold"],
-                    iou=self.config["nms_threshold"],
-                    verbose=False
-                )[0]
+                # Skip frames to maintain performance
+                if frame_count % 2 != 0:
+                    frame_count += 1
+                    continue
+                
+                # Process frame
+                results, processed_frame = self.process_frame(frame)
                 
                 # Process detections
-                processed_frame = frame.copy()
                 vehicles = 0
                 persons = 0
                 
@@ -209,6 +181,59 @@ class YOLODetector:
             'avg_vehicles_per_frame': total_vehicles / frame_count,
             'avg_persons_per_frame': total_persons / frame_count
         }
+    
+    def train_on_bdd100k(self, data_yaml_path, epochs):
+        """Fine-tune on BDD100K for vehicle detection."""
+        vehicle_classes = [self.class_mappings['bdd100k'][c] for c in 
+                         ['car', 'bus', 'truck', 'motorcycle', 'bicycle']]
+        
+        return self.model.train(
+            data=data_yaml_path,
+            epochs=epochs,
+            imgsz=self.config["input_size"][0],
+            batch=self.config["batch_size"],
+            device=self.device,
+            classes=vehicle_classes,
+            val=True,
+            plots=True
+        )
+    
+    def train_on_citypersons(self, data_yaml_path, epochs):
+        """Fine-tune on CityPersons for pedestrian detection."""
+        person_class = [self.class_mappings['citypersons']['person']]
+        
+        return self.model.train(
+            data=data_yaml_path,
+            epochs=epochs,
+            imgsz=self.config["input_size"][0],
+            batch=self.config["batch_size"],
+            device=self.device,
+            classes=person_class,
+            val=True,
+            plots=True
+        )
+    
+    def evaluate(self, data_yaml_path, dataset_type):
+        """Evaluate the model on specified dataset."""
+        classes = None
+        if dataset_type == 'bdd100k':
+            classes = [self.class_mappings['bdd100k'][c] for c in 
+                      ['car', 'bus', 'truck', 'motorcycle', 'bicycle']]
+        elif dataset_type == 'citypersons':
+            classes = [self.class_mappings['citypersons']['person']]
+            
+        results = self.model.val(
+            data=data_yaml_path,
+            classes=classes
+        )
+        
+        metrics = {
+            "precision": results.results_dict["metrics/precision(B)"],
+            "recall": results.results_dict["metrics/recall(B)"],
+            "mAP50": results.results_dict["metrics/mAP50(B)"],
+            "mAP50-95": results.results_dict["metrics/mAP50-95(B)"]
+        }
+        return metrics
     
     def predict(self, image):
         """Run inference on a single image."""

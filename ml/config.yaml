@@ -1,12 +1,16 @@
 # Model configurations
 models:
   yolo:
-    version: "v8x"
-    input_size: [640, 640]
-    confidence_threshold: 0.25
+    version: "v8n"
+    input_size: [640, 480]
+    confidence_threshold: 0.35
     nms_threshold: 0.45
-    batch_size: 16
+    batch_size: 8
     classes: ["person", "bicycle", "car", "motorcycle", "bus", "truck"]
+    inference:
+      half_precision: true
+      fuse: true
+      optimize: true
   
   faster_rcnn:
     backbone: "resnet50"
@@ -15,6 +19,13 @@ models:
     rpn_post_nms_top_n: 1000
     rpn_nms_threshold: 0.7
     classes: ["person", "car", "truck", "bus", "motorcycle"]
+
+# Data configuration
+data:
+  dataset_path: "data/object_detection"  # Path to your dataset
+  image_size: [640, 640]
+  num_classes: 6
+  classes: ["person", "bicycle", "car", "motorcycle", "bus", "truck"]
 
 # Training settings
 training:
