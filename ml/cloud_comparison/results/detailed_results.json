@@ -1,0 +1,12 @@
+{
+    "timing": {
+        "yolo": [],
+        "aws": [],
+        "azure": []
+    },
+    "detections": {
+        "yolo": [],
+        "aws": [],
+        "azure": []
+    }
+}

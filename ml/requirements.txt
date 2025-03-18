@@ -15,9 +15,5 @@ gdown>=5.1.0  # for downloading datasets
 # MLOps
 mlflow>=2.8.0
 
-# Cloud Services
-boto3>=1.34.0  # AWS SDK
-python-dotenv>=1.0.0  # for environment variables
-
 # Optional: GPU Support
 # torch-cuda  # Uncomment if you have NVIDIA GPU 
