@@ -1,10 +1,10 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Login } from './components/auth/Login';
-import { Register } from './components/auth/Register';
 import { Dashboard } from './components/dashboard/Dashboard';
-import { ErrorBoundary } from './components/shared/ErrorBoundary';
+import ErrorBoundary from "./components/shared/ErrorBoundary";
 import { useAuth } from './hooks/useAuth';
+import RegisterForm from './components/RegisterForm';
 
 const PrivateRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { isAuthenticated } = useAuth();
@@ -17,7 +17,7 @@ export const App: React.FC = () => {
             <Router>
                 <Routes>
                     <Route path="/login" element={<Login />} />
-                    <Route path="/register" element={<Register />} />
+                    <Route path="/register" element={<RegisterForm />} />
                     <Route
                         path="/dashboard"
                         element={

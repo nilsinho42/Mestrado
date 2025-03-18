@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -26,7 +27,23 @@ func main() {
 	defer logger.Sync()
 
 	// Initialize database
-	dbConn, err := sql.Open("postgres", os.Getenv("DATABASE_URL"))
+	dbHost := os.Getenv("DB_HOST")
+	dbUser := os.Getenv("DB_USER")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbName := os.Getenv("DB_NAME")
+
+	logger.Info("Database connection parameters",
+		zap.String("host", dbHost),
+		zap.String("user", dbUser),
+		zap.String("dbname", dbName),
+	)
+
+	connStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
+		dbUser, dbPassword, dbHost, dbName)
+
+	logger.Info("Attempting to connect to database", zap.String("connStr", connStr))
+
+	dbConn, err := sql.Open("postgres", connStr)
 	if err != nil {
 		logger.Fatal("Failed to connect to database", zap.Error(err))
 	}
@@ -36,6 +53,7 @@ func main() {
 	if err := dbConn.Ping(); err != nil {
 		logger.Fatal("Failed to ping database", zap.Error(err))
 	}
+	logger.Info("Successfully connected to database")
 
 	// Run migrations
 	if err := db.RunMigrations(dbConn); err != nil {

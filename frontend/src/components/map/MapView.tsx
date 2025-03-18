@@ -1,31 +1,15 @@
-import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Icon } from 'leaflet';
-
-interface Location {
-    id: string;
-    name: string;
-    latitude: number;
-    longitude: number;
-    metrics: {
-        personCount: number;
-        vehicleCount: number;
-        avgFlow: number;
-    };
-}
+import { Location } from '../../types/location';
 
 interface MapViewProps {
     locations: Location[];
-    onLocationSelect: (locationId: string) => void;
+    onLocationSelect?: (location: Location) => void;
 }
 
-export const MapView: React.FC<MapViewProps> = ({ locations, onLocationSelect }) => {
-    const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
-
+const MapView: React.FC<MapViewProps> = ({ locations, onLocationSelect }) => {
     const handleMarkerClick = (locationId: string) => {
-        setSelectedLocation(locationId);
-        onLocationSelect(locationId);
+        onLocationSelect && onLocationSelect(locations.find(l => l.id === locationId) as Location);
     };
 
     return (
@@ -50,9 +34,13 @@ export const MapView: React.FC<MapViewProps> = ({ locations, onLocationSelect })
                         <Popup>
                             <div className="popup-content">
                                 <h3>{location.name}</h3>
-                                <p>People: {location.metrics.personCount}</p>
-                                <p>Vehicles: {location.metrics.vehicleCount}</p>
-                                <p>Avg Flow: {location.metrics.avgFlow}/min</p>
+                                {location.metrics && (
+                                    <>
+                                        <p>People: {location.metrics.personCount}</p>
+                                        <p>Vehicles: {location.metrics.vehicleCount}</p>
+                                        <p>Avg Flow: {location.metrics.avgFlow}/min</p>
+                                    </>
+                                )}
                             </div>
                         </Popup>
                     </Marker>
@@ -83,4 +71,6 @@ export const MapView: React.FC<MapViewProps> = ({ locations, onLocationSelect })
             `}</style>
         </div>
     );
-}; 
+};
+
+export default MapView; 

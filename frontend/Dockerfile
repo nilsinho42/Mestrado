@@ -12,6 +12,20 @@ RUN npm install
 # Copy source code
 COPY . .
 
+# Create env file from build args
+ARG VITE_API_URL
+ARG VITE_WS_URL
+ARG VITE_APP_TITLE
+ARG VITE_MLFLOW_URL
+ARG VITE_GRAFANA_URL
+
+# Set environment variables
+ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_WS_URL=$VITE_WS_URL
+ENV VITE_APP_TITLE=$VITE_APP_TITLE
+ENV VITE_MLFLOW_URL=$VITE_MLFLOW_URL
+ENV VITE_GRAFANA_URL=$VITE_GRAFANA_URL
+
 # Build the application
 RUN npm run build
 

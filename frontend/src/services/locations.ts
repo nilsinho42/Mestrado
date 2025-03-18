@@ -1,23 +1,5 @@
-import { api } from './api';
-
-export interface Location {
-    id: string;
-    name: string;
-    latitude: number;
-    longitude: number;
-    metrics: {
-        personCount: number;
-        vehicleCount: number;
-        avgFlow: number;
-        lastUpdated: string;
-    };
-}
-
-export interface LocationUpdateData {
-    personCount: number;
-    vehicleCount: number;
-    avgFlow: number;
-}
+import api from './api';
+import { Location } from '../types/location';
 
 export const getLocations = async (): Promise<Location[]> => {
     const response = await api.get('/locations');
@@ -29,13 +11,13 @@ export const getLocation = async (id: string): Promise<Location> => {
     return response.data;
 };
 
-export const addLocation = async (data: Omit<Location, 'id' | 'metrics'>): Promise<Location> => {
-    const response = await api.post('/locations', data);
+export const createLocation = async (location: Omit<Location, 'id'>): Promise<Location> => {
+    const response = await api.post('/locations', location);
     return response.data;
 };
 
-export const updateLocationMetrics = async (id: string, data: LocationUpdateData): Promise<Location> => {
-    const response = await api.patch(`/locations/${id}/metrics`, data);
+export const updateLocation = async (id: string, location: Partial<Location>): Promise<Location> => {
+    const response = await api.put(`/locations/${id}`, location);
     return response.data;
 };
 

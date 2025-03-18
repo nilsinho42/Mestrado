@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ModelMetrics } from './ModelMetrics';
-import { CloudComparison } from './CloudComparison';
+import CloudComparison from './CloudComparison';
 import { getModels } from '../../services/models';
 import { Model } from '../../types/model';
 import { useWebSocket } from '../../hooks/useWebSocket';

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
     BarChart,
     Bar,
@@ -9,8 +9,7 @@ import {
     Legend,
     ResponsiveContainer
 } from 'recharts';
-import { getCloudCosts, getCloudPerformance } from '../../services/models';
-import { CloudMetrics } from '../../types/model';
+import { getCloudCosts } from '../../services/models';
 
 interface ComparisonData {
     platform: string;
@@ -20,7 +19,7 @@ interface ComparisonData {
     costPerRequest: number;
 }
 
-export const CloudComparison: React.FC = () => {
+const CloudComparison = () => {
     const [data, setData] = useState<ComparisonData[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -29,12 +28,9 @@ export const CloudComparison: React.FC = () => {
         const fetchData = async () => {
             try {
                 setLoading(true);
-                const [costs, performance] = await Promise.all([
-                    getCloudCosts(),
-                    getCloudPerformance()
-                ]);
+                const costs = await getCloudCosts();
 
-                // Process and combine the data
+                // Process the data
                 const processedData: ComparisonData[] = Object.entries(costs).map(([platform, metrics]) => ({
                     platform,
                     totalCost: metrics.totalCost,
@@ -147,4 +143,6 @@ export const CloudComparison: React.FC = () => {
             </div>
         </div>
     );
-}; 
+};
+
+export default CloudComparison; 
