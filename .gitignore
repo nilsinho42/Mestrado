@@ -9,6 +9,7 @@ frontend/node_modules/*
 # Production
 /dist
 /build
+yolov8n*
 
 # Environment files
 .env
