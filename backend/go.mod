@@ -13,7 +13,10 @@ require (
 	gorm.io/gorm v1.25.12
 )
 
-require go.uber.org/multierr v1.10.0 // indirect
+require (
+	github.com/golang-jwt/jwt/v4 v4.5.1 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
+)
 
 require (
 	github.com/bytedance/sonic v1.11.6 // indirect
