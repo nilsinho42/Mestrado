@@ -1,5 +1,6 @@
 # Dependencies
 frontend/node_modules/*
+.specstory/*
 /.pnp
 .pnp.js
 
@@ -34,3 +35,4 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw? 
+.specstory/history/.what-is-this.md

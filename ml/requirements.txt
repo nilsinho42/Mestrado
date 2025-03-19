@@ -15,5 +15,12 @@ gdown>=5.1.0  # for downloading datasets
 # MLOps
 mlflow>=2.8.0
 
+# API and Dashboard
+fastapi>=0.104.0
+uvicorn>=0.24.0
+streamlit>=1.29.0
+pandas>=2.1.0
+plotly>=5.18.0
+
 # Optional: GPU Support
 # torch-cuda  # Uncomment if you have NVIDIA GPU 
