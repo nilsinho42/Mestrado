@@ -3,7 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,7 +12,7 @@ import (
 // RunMigrations executes all SQL migration files in the migrations directory
 func RunMigrations(db *sql.DB) error {
 	// Read all migration files
-	files, err := ioutil.ReadDir("migrations")
+	files, err := os.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("failed to read migrations directory: %v", err)
 	}
@@ -52,7 +52,7 @@ func RunMigrations(db *sql.DB) error {
 		}
 
 		// Read migration file
-		content, err := ioutil.ReadFile(filepath.Join("migrations", file))
+		content, err := os.ReadFile(filepath.Join("migrations", file))
 		if err != nil {
 			return fmt.Errorf("failed to read migration file %s: %v", file, err)
 		}

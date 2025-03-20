@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/golang-jwt/jwt/v4"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/nilsinho42/Mestrado/db/models"
 	"github.com/nilsinho42/Mestrado/db/operations"
 )

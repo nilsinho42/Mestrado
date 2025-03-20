@@ -39,9 +39,16 @@ export interface Detection {
     createdAt: string;
 }
 
-export interface CloudMetrics {
-    platform: string;
-    totalCost: number;
-    totalRequests: number;
+export interface CloudMetric {
+    date: string;
+    requestCount: number;
     avgLatency: number;
+    cost: number;
+}
+
+export interface CloudPerformanceMetric {
+    platform: string;
+    avgLatency: number;
+    totalRequests: number;
+    totalCost: number;
 } 

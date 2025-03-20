@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { login as loginApi, register as registerApi, logout as logoutApi } from '../services/auth';
+import { login as loginApi, register as registerApi, logout as logoutApi, setToken } from '../services/auth';
 
 interface User {
     id: number;
@@ -26,7 +26,9 @@ export const useAuth = () => {
     const login = useCallback(async (email: string, password: string) => {
         try {
             const response = await loginApi({ email, password });
+            localStorage.setItem('token', response.token);
             localStorage.setItem('user', JSON.stringify(response.user));
+            setToken(response.token);
             setState({
                 user: response.user,
                 isAuthenticated: true,
@@ -40,7 +42,9 @@ export const useAuth = () => {
     const register = useCallback(async (email: string, password: string, confirmPassword: string) => {
         try {
             const response = await registerApi({ email, password, confirmPassword });
+            localStorage.setItem('token', response.token);
             localStorage.setItem('user', JSON.stringify(response.user));
+            setToken(response.token);
             setState({
                 user: response.user,
                 isAuthenticated: true,
@@ -53,6 +57,7 @@ export const useAuth = () => {
 
     const logout = useCallback(() => {
         logoutApi();
+        localStorage.removeItem('token');
         localStorage.removeItem('user');
         setState({
             user: null,

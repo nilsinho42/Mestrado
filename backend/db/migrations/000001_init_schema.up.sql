@@ -1,72 +1,72 @@
-CREATE TABLE users (
-    id BIGSERIAL PRIMARY KEY,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    role VARCHAR(50) NOT NULL DEFAULT 'user',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+-- CREATE TABLE users (
+--     id BIGSERIAL PRIMARY KEY,
+--     email VARCHAR(255) UNIQUE NOT NULL,
+--     password_hash VARCHAR(255) NOT NULL,
+--     role VARCHAR(50) NOT NULL DEFAULT 'user',
+--     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+--     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+-- );
 
-CREATE TABLE models (
-    id BIGSERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    version VARCHAR(50) NOT NULL,
-    type VARCHAR(50) NOT NULL,
-    framework VARCHAR(50) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'inactive',
-    cloud_platform VARCHAR(50) NOT NULL,
-    endpoint_url TEXT,
-    accuracy DOUBLE PRECISION,
-    avg_inference_time DOUBLE PRECISION,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deployed_at TIMESTAMP WITH TIME ZONE,
-    created_by BIGINT REFERENCES users(id),
-    UNIQUE(name, version, cloud_platform)
-);
+-- CREATE TABLE models (
+--     id BIGSERIAL PRIMARY KEY,
+--     name VARCHAR(255) NOT NULL,
+--     version VARCHAR(50) NOT NULL,
+--     type VARCHAR(50) NOT NULL,
+--     framework VARCHAR(50) NOT NULL,
+--     status VARCHAR(50) NOT NULL DEFAULT 'inactive',
+--     cloud_platform VARCHAR(50) NOT NULL,
+--     endpoint_url TEXT,
+--     accuracy DOUBLE PRECISION,
+--     avg_inference_time DOUBLE PRECISION,
+--     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+--     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+--     deployed_at TIMESTAMP WITH TIME ZONE,
+--     created_by BIGINT REFERENCES users(id),
+--     UNIQUE(name, version, cloud_platform)
+-- );
 
-CREATE TABLE model_metrics (
-    id BIGSERIAL PRIMARY KEY,
-    model_id BIGINT REFERENCES models(id),
-    date DATE NOT NULL DEFAULT CURRENT_DATE,
-    inference_count BIGINT NOT NULL DEFAULT 0,
-    avg_inference_time DOUBLE PRECISION NOT NULL DEFAULT 0,
-    avg_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
-    error_count BIGINT NOT NULL DEFAULT 0,
-    UNIQUE(model_id, date)
-);
+-- CREATE TABLE model_metrics (
+--     id BIGSERIAL PRIMARY KEY,
+--     model_id BIGINT REFERENCES models(id),
+--     date DATE NOT NULL DEFAULT CURRENT_DATE,
+--     inference_count BIGINT NOT NULL DEFAULT 0,
+--     avg_inference_time DOUBLE PRECISION NOT NULL DEFAULT 0,
+--     avg_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+--     error_count BIGINT NOT NULL DEFAULT 0,
+--     UNIQUE(model_id, date)
+-- );
 
-CREATE TABLE images (
-    id BIGSERIAL PRIMARY KEY,
-    source VARCHAR(255) NOT NULL,
-    processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    cloud_platform VARCHAR(50) NOT NULL,
-    processing_time DOUBLE PRECISION NOT NULL
-);
+-- CREATE TABLE images (
+--     id BIGSERIAL PRIMARY KEY,
+--     source VARCHAR(255) NOT NULL,
+--     processed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+--     cloud_platform VARCHAR(50) NOT NULL,
+--     processing_time DOUBLE PRECISION NOT NULL
+-- );
 
-CREATE TABLE detections (
-    id BIGSERIAL PRIMARY KEY,
-    image_id BIGINT REFERENCES images(id),
-    class VARCHAR(50) NOT NULL,
-    score DOUBLE PRECISION NOT NULL,
-    bounding_box JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
+-- CREATE TABLE detections (
+--     id BIGSERIAL PRIMARY KEY,
+--     image_id BIGINT REFERENCES images(id),
+--     class VARCHAR(50) NOT NULL,
+--     score DOUBLE PRECISION NOT NULL,
+--     bounding_box JSONB NOT NULL,
+--     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+-- );
 
-CREATE TABLE cloud_metrics (
-    id BIGSERIAL PRIMARY KEY,
-    platform VARCHAR(50) NOT NULL,
-    request_count BIGINT NOT NULL DEFAULT 0,
-    avg_latency DOUBLE PRECISION NOT NULL DEFAULT 0,
-    cost DOUBLE PRECISION NOT NULL DEFAULT 0,
-    date DATE NOT NULL DEFAULT CURRENT_DATE,
-    UNIQUE(platform, date)
-);
+-- CREATE TABLE cloud_metrics (
+--     id BIGSERIAL PRIMARY KEY,
+--     platform VARCHAR(50) NOT NULL,
+--     request_count BIGINT NOT NULL DEFAULT 0,
+--     avg_latency DOUBLE PRECISION NOT NULL DEFAULT 0,
+--     cost DOUBLE PRECISION NOT NULL DEFAULT 0,
+--     date DATE NOT NULL DEFAULT CURRENT_DATE,
+--     UNIQUE(platform, date)
+-- );
 
-CREATE INDEX idx_detections_image_id ON detections(image_id);
-CREATE INDEX idx_cloud_metrics_platform_date ON cloud_metrics(platform, date);
-CREATE INDEX idx_images_cloud_platform ON images(cloud_platform);
-CREATE INDEX idx_models_name_version ON models(name, version);
-CREATE INDEX idx_models_status ON models(status);
-CREATE INDEX idx_models_cloud_platform ON models(cloud_platform);
-CREATE INDEX idx_model_metrics_date ON model_metrics(date); 
+-- CREATE INDEX idx_detections_image_id ON detections(image_id);
+-- CREATE INDEX idx_cloud_metrics_platform_date ON cloud_metrics(platform, date);
+-- CREATE INDEX idx_images_cloud_platform ON images(cloud_platform);
+-- CREATE INDEX idx_models_name_version ON models(name, version);
+-- CREATE INDEX idx_models_status ON models(status);
+-- CREATE INDEX idx_models_cloud_platform ON models(cloud_platform);
+-- CREATE INDEX idx_model_metrics_date ON model_metrics(date); 

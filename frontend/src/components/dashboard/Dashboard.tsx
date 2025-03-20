@@ -1,30 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { ModelMetrics } from './ModelMetrics';
+import { ModelComparison } from './ModelComparison';
 import CloudComparison from './CloudComparison';
 import { getModels } from '../../services/models';
 import { Model } from '../../types/model';
-import { useWebSocket } from '../../hooks/useWebSocket';
+import { UserMenu } from './UserMenu';
 
 export const Dashboard: React.FC = () => {
-    const [selectedModel, setSelectedModel] = useState<number | null>(null);
     const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('24h');
     const [models, setModels] = useState<Model[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    const { isConnected, lastMessage } = useWebSocket(
-        `${import.meta.env.VITE_WS_URL || 'ws://localhost:8080'}/ws`
-    );
-
     useEffect(() => {
         const fetchModels = async () => {
             try {
                 setLoading(true);
-                const data = await getModels({ status: 'deployed' });
-                setModels(data);
-                if (data.length > 0 && !selectedModel) {
-                    setSelectedModel(data[0].id);
-                }
+                const data = await getModels({ status: 'active' });
+                // Ensure data is an array even if API returns null
+                setModels(data || []);
                 setError(null);
             } catch (err) {
                 setError('Failed to load models');
@@ -37,44 +30,16 @@ export const Dashboard: React.FC = () => {
         fetchModels();
     }, []);
 
-    // Handle real-time updates
-    useEffect(() => {
-        if (lastMessage?.type === 'modelUpdate') {
-            // Update metrics in real-time
-            // This would trigger a re-render of the charts
-            console.log('Real-time update received:', lastMessage.data);
-        }
-    }, [lastMessage]);
-
     return (
         <div className="dashboard">
             <header className="dashboard-header">
                 <h2>Monitoring Dashboard</h2>
-                <div className="connection-status">
-                    Status: {isConnected ? 
-                        <span className="connected">Connected</span> : 
-                        <span className="disconnected">Disconnected</span>
-                    }
+                <div className="header-right">
+                    <UserMenu />
                 </div>
             </header>
 
             <div className="dashboard-controls">
-                <div className="model-selector">
-                    <label htmlFor="model">Model:</label>
-                    <select
-                        id="model"
-                        value={selectedModel || ''}
-                        onChange={(e) => setSelectedModel(Number(e.target.value))}
-                    >
-                        <option value="">Select a model</option>
-                        {models.map((model) => (
-                            <option key={model.id} value={model.id}>
-                                {model.name} (v{model.version}) - {model.cloudPlatform}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
                 <div className="time-range-selector">
                     <label htmlFor="timeRange">Time Range:</label>
                     <select
@@ -94,18 +59,19 @@ export const Dashboard: React.FC = () => {
                     <div className="loading">Loading dashboard data...</div>
                 ) : error ? (
                     <div className="error">{error}</div>
+                ) : models.length === 0 ? (
+                    <div className="no-models">No active models available</div>
                 ) : (
                     <>
-                        {selectedModel && (
-                            <div className="metrics-section">
-                                <ModelMetrics 
-                                    modelId={selectedModel} 
-                                    timeRange={timeRange} 
-                                />
-                            </div>
-                        )}
+                        <div className="metrics-section">
+                            <ModelComparison 
+                                models={models}
+                                timeRange={timeRange}
+                            />
+                        </div>
 
                         <div className="comparison-section">
+                            <h3>Cloud Platform Comparison</h3>
                             <CloudComparison />
                         </div>
                     </>
@@ -126,16 +92,10 @@ export const Dashboard: React.FC = () => {
                     margin-bottom: 20px;
                 }
 
-                .connection-status {
-                    font-size: 0.9em;
-                }
-
-                .connected {
-                    color: #4caf50;
-                }
-
-                .disconnected {
-                    color: #f44336;
+                .header-right {
+                    display: flex;
+                    align-items: center;
+                    gap: 2rem;
                 }
 
                 .dashboard-controls {
@@ -144,7 +104,6 @@ export const Dashboard: React.FC = () => {
                     margin-bottom: 20px;
                 }
 
-                .model-selector,
                 .time-range-selector {
                     display: flex;
                     align-items: center;
@@ -158,7 +117,8 @@ export const Dashboard: React.FC = () => {
                 }
 
                 .dashboard-content {
-                    display: grid;
+                    display: flex;
+                    flex-direction: column;
                     gap: 20px;
                 }
 
@@ -175,13 +135,18 @@ export const Dashboard: React.FC = () => {
                 }
 
                 .loading,
-                .error {
+                .error,
+                .no-models {
                     text-align: center;
                     padding: 20px;
                 }
 
                 .error {
                     color: #f44336;
+                }
+
+                .no-models {
+                    color: #666;
                 }
 
                 @media (max-width: 768px) {

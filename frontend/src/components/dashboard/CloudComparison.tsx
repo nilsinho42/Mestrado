@@ -7,20 +7,29 @@ import {
     CartesianGrid,
     Tooltip,
     Legend,
-    ResponsiveContainer
+    ResponsiveContainer,
+    LineChart,
+    Line
 } from 'recharts';
-import { getCloudCosts } from '../../services/models';
+import { getCloudCosts, getCloudPerformance } from '../../services/models';
 
-interface ComparisonData {
-    platform: string;
-    totalCost: number;
-    totalRequests: number;
+interface CloudMetric {
+    date: string;
+    requestCount: number;
     avgLatency: number;
-    costPerRequest: number;
+    cost: number;
+}
+
+interface CloudPerformanceMetric {
+    platform: string;
+    avgLatency: number;
+    totalRequests: number;
+    totalCost: number;
 }
 
 const CloudComparison = () => {
-    const [data, setData] = useState<ComparisonData[]>([]);
+    const [metrics, setMetrics] = useState<Record<string, CloudMetric[]>>({});
+    const [performance, setPerformance] = useState<CloudPerformanceMetric[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -28,20 +37,18 @@ const CloudComparison = () => {
         const fetchData = async () => {
             try {
                 setLoading(true);
-                const costs = await getCloudCosts();
+                const [metricsData, performanceData] = await Promise.all([
+                    getCloudCosts(),
+                    getCloudPerformance()
+                ]);
 
-                // Process the data
-                const processedData: ComparisonData[] = Object.entries(costs).map(([platform, metrics]) => ({
-                    platform,
-                    totalCost: metrics.totalCost,
-                    totalRequests: metrics.totalRequests,
-                    avgLatency: metrics.avgLatency,
-                    costPerRequest: metrics.totalRequests > 0 
-                        ? metrics.totalCost / metrics.totalRequests 
-                        : 0
-                }));
-
-                setData(processedData);
+                if (metricsData) {
+                    setMetrics(metricsData as Record<string, CloudMetric[]>);
+                }
+                if (performanceData) {
+                    setPerformance(performanceData as CloudPerformanceMetric[]);
+                }
+                
                 setError(null);
             } catch (err) {
                 setError('Failed to load cloud comparison data');
@@ -54,19 +61,70 @@ const CloudComparison = () => {
         fetchData();
     }, []);
 
-    if (loading) return <div>Loading comparison data...</div>;
+    if (loading) return <div>Loading cloud comparison data...</div>;
     if (error) return <div className="error">{error}</div>;
-    if (!data.length) return <div>No comparison data available</div>;
+    if (!performance.length) return <div>No cloud comparison data available</div>;
+
+    // Calculate cost per request for each platform
+    const costPerRequestData = performance.map(p => ({
+        platform: p.platform,
+        costPerRequest: p.totalRequests > 0 ? p.totalCost / p.totalRequests : 0
+    }));
+
+    // Get all unique dates
+    const allDates = Array.from(new Set(
+        Object.values(metrics)
+            .flat()
+            .map(m => m.date)
+            .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+    ));
+
+    // Prepare data for the line chart
+    const dailyCostData = allDates.map(date => {
+        const dataPoint: { date: string; [key: string]: number | string } = { date };
+        Object.entries(metrics).forEach(([platform, data]) => {
+            const metric = data.find(m => m.date === date);
+            dataPoint[platform] = metric?.cost || 0;
+        });
+        return dataPoint;
+    });
 
     return (
         <div className="cloud-comparison">
-            <h3>Cloud Platform Comparison</h3>
+            {/* Daily Cost Trends */}
+            <div className="chart-container">
+                <h4>Daily Cost Trends</h4>
+                <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={dailyCostData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis 
+                            dataKey="date" 
+                            tickFormatter={(date) => new Date(date).toLocaleDateString()}
+                        />
+                        <YAxis />
+                        <Tooltip 
+                            formatter={(value: number) => `$${value.toFixed(2)}`}
+                            labelFormatter={(date) => new Date(date as string).toLocaleDateString()}
+                        />
+                        <Legend />
+                        {Object.keys(metrics).map((platform, index) => (
+                            <Line
+                                key={platform}
+                                type="monotone"
+                                dataKey={platform}
+                                stroke={['#8884d8', '#82ca9d', '#ffc658'][index % 3]}
+                                name={`${platform} Cost`}
+                            />
+                        ))}
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
 
-            {/* Cost Comparison */}
+            {/* Total Cost Comparison */}
             <div className="chart-container">
                 <h4>Total Cost Comparison</h4>
                 <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={data}>
+                    <BarChart data={performance}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="platform" />
                         <YAxis />
@@ -76,13 +134,29 @@ const CloudComparison = () => {
                         <Legend />
                         <Bar 
                             dataKey="totalCost" 
+                            name="Total Cost" 
                             fill="#8884d8" 
-                            name="Total Cost"
                         />
+                    </BarChart>
+                </ResponsiveContainer>
+            </div>
+
+            {/* Cost per Request Comparison */}
+            <div className="chart-container">
+                <h4>Cost per Request</h4>
+                <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={costPerRequestData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="platform" />
+                        <YAxis />
+                        <Tooltip 
+                            formatter={(value: number) => `$${value.toFixed(4)}`}
+                        />
+                        <Legend />
                         <Bar 
                             dataKey="costPerRequest" 
+                            name="Cost per Request" 
                             fill="#82ca9d" 
-                            name="Cost per Request"
                         />
                     </BarChart>
                 </ResponsiveContainer>
@@ -92,55 +166,104 @@ const CloudComparison = () => {
             <div className="chart-container">
                 <h4>Performance Comparison</h4>
                 <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={data}>
+                    <BarChart data={performance}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="platform" />
-                        <YAxis yAxisId="left" />
-                        <YAxis yAxisId="right" orientation="right" />
-                        <Tooltip />
+                        <YAxis />
+                        <Tooltip 
+                            formatter={(value: number) => `${value.toFixed(2)}ms`}
+                        />
                         <Legend />
                         <Bar 
-                            yAxisId="left"
                             dataKey="avgLatency" 
-                            fill="#8884d8" 
-                            name="Avg. Latency (ms)"
-                        />
-                        <Bar 
-                            yAxisId="right"
-                            dataKey="totalRequests" 
-                            fill="#82ca9d" 
-                            name="Total Requests"
+                            name="Average Latency" 
+                            fill="#ffc658" 
                         />
                     </BarChart>
                 </ResponsiveContainer>
             </div>
 
-            {/* Summary Table */}
-            <div className="comparison-table">
+            {/* Detailed Comparison Table */}
+            <div className="table-container">
                 <h4>Detailed Comparison</h4>
                 <table>
                     <thead>
                         <tr>
                             <th>Platform</th>
-                            <th>Total Cost</th>
                             <th>Total Requests</th>
                             <th>Avg. Latency</th>
-                            <th>Cost per Request</th>
+                            <th>Total Cost</th>
+                            <th>Cost/Request</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {data.map((item) => (
-                            <tr key={item.platform}>
-                                <td>{item.platform}</td>
-                                <td>${item.totalCost.toFixed(2)}</td>
-                                <td>{item.totalRequests.toLocaleString()}</td>
-                                <td>{item.avgLatency.toFixed(2)}ms</td>
-                                <td>${item.costPerRequest.toFixed(4)}</td>
+                        {performance.map(p => (
+                            <tr key={p.platform}>
+                                <td>{p.platform}</td>
+                                <td>{p.totalRequests.toLocaleString()}</td>
+                                <td>{p.avgLatency.toFixed(2)}ms</td>
+                                <td>${p.totalCost.toFixed(2)}</td>
+                                <td>${(p.totalRequests > 0 ? p.totalCost / p.totalRequests : 0).toFixed(4)}</td>
                             </tr>
                         ))}
                     </tbody>
                 </table>
             </div>
+
+            <style>{`
+                .cloud-comparison {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 20px;
+                }
+
+                .chart-container {
+                    background: white;
+                    border-radius: 8px;
+                    padding: 20px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }
+
+                h4 {
+                    margin-top: 0;
+                    margin-bottom: 20px;
+                    color: #666;
+                }
+
+                .table-container {
+                    background: white;
+                    border-radius: 8px;
+                    padding: 20px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    overflow-x: auto;
+                }
+
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                }
+
+                th, td {
+                    padding: 12px;
+                    text-align: left;
+                    border-bottom: 1px solid #eee;
+                }
+
+                th {
+                    background-color: #f8f9fa;
+                    font-weight: 600;
+                }
+
+                tr:last-child td {
+                    border-bottom: none;
+                }
+
+                .error {
+                    color: #f44336;
+                    text-align: center;
+                    padding: 20px;
+                }
+            `}</style>
         </div>
     );
 };

@@ -19,11 +19,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=http://backend:8080/api
-        - VITE_WS_URL=ws://backend:8080
+        - VITE_API_URL=http://localhost:8080/api
+        - VITE_WS_URL=ws://localhost:8080
         - VITE_APP_TITLE=Cloud Object Detection Dashboard
         - VITE_MLFLOW_URL=http://mlflow:5000
-        - VITE_GRAFANA_URL=http://grafana:3000
     ports:
       - "3000:80"
     depends_on:
@@ -50,24 +49,5 @@ services:
       - postgres
     command: mlflow server --host 0.0.0.0 --port 5000
 
-  prometheus:
-    image: prom/prometheus:v2.45.0
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./infrastructure/prometheus:/etc/prometheus
-      - prometheus_data:/prometheus
-
-  grafana:
-    image: grafana/grafana:10.0.3
-    ports:
-      - "3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-
 volumes:
   postgres_data:
-  prometheus_data:
-  grafana_data: 

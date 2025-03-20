@@ -32,14 +32,30 @@ RUN npm run build
 # Production stage
 FROM nginx:alpine
 
+# Add support for host.docker.internal
+RUN apk add --no-cache bash
+
+# Create entrypoint script
+RUN printf '#!/bin/bash\n\
+echo "Updating hosts file..."\n\
+DOCKER_INTERNAL_IP=$(getent hosts host.docker.internal | cut -d" " -f1)\n\
+if [ -z "$DOCKER_INTERNAL_IP" ]; then\n\
+    echo "172.17.0.1 host.docker.internal" >> /etc/hosts\n\
+fi\n\
+echo "Starting nginx..."\n\
+exec nginx -g "daemon off;"\n' > /entrypoint.sh
+
+# Make the script executable
+RUN chmod +x /entrypoint.sh
+
 # Copy built assets from build stage
 COPY --from=build /app/dist /usr/share/nginx/html
 
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Expose port 3000
-EXPOSE 3000
+# Expose port 80
+EXPOSE 80
 
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"] 
+# Start nginx using the entrypoint script
+ENTRYPOINT ["/entrypoint.sh"] 

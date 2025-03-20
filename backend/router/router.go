@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/nilsinho42/Mestrado/controllers"
 	"github.com/nilsinho42/Mestrado/middleware"
@@ -13,12 +14,22 @@ import (
 func SetupRouter(db *sql.DB) *gin.Engine {
 	router := gin.Default()
 
+	// Configure CORS
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * 60 * 60, // 12 hours
+	}))
+
 	// Configure rate limits for specific endpoints
 	rateLimits := map[string]int{
-		"/api/v1/ml/videos/process":    10, // 10 requests per minute
-		"/api/v1/ml/videos/:id/status": 60, // 60 requests per minute
-		"/api/v1/ml/detections/stats":  30, // 30 requests per minute
-		"/api/v1/auth/logout":          30, // 30 requests per minute
+		"/api/ml/videos/process":    10, // 10 requests per minute
+		"/api/ml/videos/:id/status": 60, // 60 requests per minute
+		"/api/ml/detections/stats":  30, // 30 requests per minute
+		"/api/auth/logout":          30, // 30 requests per minute
 	}
 
 	// Initialize rate limiter
@@ -33,12 +44,21 @@ func SetupRouter(db *sql.DB) *gin.Engine {
 
 	// Initialize controllers
 	mlController := controllers.NewMLController(mlService)
+	modelController := controllers.NewModelController(db)
+	cloudController := controllers.NewCloudController(db)
 
-	// Public routes
+	// Health check endpoint (must be first)
 	router.GET("/health", controllers.HandleHealth)
 
+	// Public auth endpoints
+	auth := router.Group("/api")
+	{
+		auth.POST("/login", controllers.HandleLogin)
+		auth.POST("/register", controllers.HandleRegister)
+	}
+
 	// Protected routes
-	protected := router.Group("/api/v1")
+	protected := router.Group("/api")
 	protected.Use(middleware.AuthMiddleware())
 	protected.Use(rateLimiter.RateLimit())
 	{
@@ -48,6 +68,23 @@ func SetupRouter(db *sql.DB) *gin.Engine {
 			ml.POST("/videos/process", mlController.ProcessVideo)
 			ml.GET("/videos/:id/status", mlController.GetVideoStatus)
 			ml.GET("/detections/stats", mlController.GetDetectionStats)
+		}
+
+		// Model routes
+		models := protected.Group("/models")
+		{
+			models.POST("/register", modelController.RegisterModel)
+			models.POST("/:id/deploy", modelController.DeployModel)
+			models.GET("/list", modelController.ListModels)
+			models.GET("/:id/metrics", modelController.GetModelMetrics)
+			models.GET("/compare", modelController.CompareModels)
+		}
+
+		// Cloud routes
+		cloud := protected.Group("/cloud")
+		{
+			cloud.GET("/costs", cloudController.GetCloudCosts)
+			cloud.GET("/performance", cloudController.GetCloudPerformance)
 		}
 
 		// Auth routes

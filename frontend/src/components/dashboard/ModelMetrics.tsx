@@ -27,7 +27,7 @@ export const ModelMetrics: React.FC<Props> = ({ modelId, timeRange }) => {
             try {
                 setLoading(true);
                 const data = await getModelMetrics(modelId, timeRange);
-                setMetrics(data);
+                setMetrics(data || []);
                 setError(null);
             } catch (err) {
                 setError('Failed to load model metrics');
@@ -42,7 +42,7 @@ export const ModelMetrics: React.FC<Props> = ({ modelId, timeRange }) => {
 
     if (loading) return <div>Loading metrics...</div>;
     if (error) return <div className="error">{error}</div>;
-    if (!metrics.length) return <div>No metrics available</div>;
+    if (!metrics || !metrics.length) return <div>No metrics available</div>;
 
     return (
         <div className="model-metrics">

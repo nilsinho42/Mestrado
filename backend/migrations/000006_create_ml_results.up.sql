@@ -45,12 +45,12 @@ CREATE TABLE IF NOT EXISTS performance_metrics (
 );
 
 -- Create indexes
-CREATE INDEX idx_processed_videos_user_id ON processed_videos(user_id);
-CREATE INDEX idx_processed_videos_status ON processed_videos(status);
-CREATE INDEX idx_detection_results_video_id ON detection_results(video_id);
-CREATE INDEX idx_service_comparisons_video_id ON service_comparisons(video_id);
-CREATE INDEX idx_performance_metrics_service_name ON performance_metrics(service_name);
-CREATE INDEX idx_performance_metrics_timestamp ON performance_metrics(timestamp);
+CREATE INDEX IF NOT EXISTS idx_processed_videos_user_id ON processed_videos(user_id);
+CREATE INDEX IF NOT EXISTS idx_processed_videos_status ON processed_videos(status);
+CREATE INDEX IF NOT EXISTS idx_detection_results_video_id ON detection_results(video_id);
+CREATE INDEX IF NOT EXISTS idx_service_comparisons_video_id ON service_comparisons(video_id);
+CREATE INDEX IF NOT EXISTS idx_performance_metrics_service_name ON performance_metrics(service_name);
+CREATE INDEX IF NOT EXISTS idx_performance_metrics_timestamp ON performance_metrics(timestamp);
 
 -- Add updated_at trigger function if not exists
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -62,7 +62,8 @@ END;
 $$ language 'plpgsql';
 
 -- Add trigger to processed_videos
+DROP TRIGGER IF EXISTS update_processed_videos_updated_at ON processed_videos;
 CREATE TRIGGER update_processed_videos_updated_at
     BEFORE UPDATE ON processed_videos
     FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column(); 
+    EXECUTE FUNCTION update_updated_at_column();

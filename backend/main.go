@@ -14,6 +14,7 @@ import (
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
 
+	"github.com/nilsinho42/Mestrado/controllers"
 	"github.com/nilsinho42/Mestrado/db"
 	"github.com/nilsinho42/Mestrado/router"
 )
@@ -59,6 +60,9 @@ func main() {
 	if err := db.RunMigrations(dbConn); err != nil {
 		logger.Fatal("Failed to run migrations", zap.Error(err))
 	}
+
+	// Initialize controllers with database connection
+	controllers.InitHandlers(dbConn, logger)
 
 	// Setup router
 	r := router.SetupRouter(dbConn)

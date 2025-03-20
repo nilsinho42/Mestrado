@@ -2,285 +2,240 @@ import os
 import time
 import cv2
 import numpy as np
+from datetime import datetime
 import boto3
 from azure.cognitiveservices.vision.computervision import ComputerVisionClient
 from msrest.authentication import CognitiveServicesCredentials
-from dotenv import load_dotenv
-import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
-import json
-from dataclasses import dataclass
-from typing import List, Dict, Any
-from io import BytesIO
-import yaml
+from ultralytics import YOLO
 import sys
-import argparse
-from pathlib import Path
+import os
 
-# Add the ml directory to Python path
-ml_dir = Path(__file__).parent.parent
-sys.path.append(str(ml_dir))
+# Add parent directory to path to import our modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from mlflow_tracking import DetectionTracker
 
-from models.yolo_model import YOLODetector
-
-# Load environment variables
-load_dotenv()
-
-@dataclass
-class Detection:
-    name: str
-    confidence: float
-    bounding_box: dict
-
-class VideoProcessor:
+class CloudServiceComparator:
     def __init__(self):
-        """Initialize video processor with different service clients."""
-        # Load YOLO configuration
-        with open('ml/config.yaml', 'r') as f:
-            config = yaml.safe_load(f)
+        """Initialize cloud services and MLFlow tracking."""
+        # Initialize MLFlow tracker
+        self.tracker = DetectionTracker()
         
-        # Initialize YOLO model
-        self.yolo = YOLODetector(config)
+        # Initialize AWS Rekognition
+        self.rekognition = boto3.client('rekognition')
         
-        # AWS Rekognition client
-        self.rekognition = boto3.client(
-            'rekognition',
-            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.getenv('AWS_REGION', 'us-east-2')
-        )
-        
-        # Azure Computer Vision client
+        # Initialize Azure Computer Vision
         self.azure_client = ComputerVisionClient(
-            endpoint=os.getenv('AZURE_COMPUTER_VISION_ENDPOINT'),
-            credentials=CognitiveServicesCredentials(os.getenv('AZURE_COMPUTER_VISION_KEY'))
+            endpoint=os.getenv('AZURE_ENDPOINT'),
+            credentials=CognitiveServicesCredentials(os.getenv('AZURE_KEY'))
         )
         
-        # Results storage
-        self.results = {
-            'yolo': {'times': [], 'detections': []},
-            'aws': {'times': [], 'detections': []},
-            'azure': {'times': [], 'detections': []}
-        }
+        # Initialize YOLO
+        self.yolo_model = YOLO('yolov8n.pt')
     
-    def process_yolo(self, frame) -> tuple[float, List[Detection]]:
-        """Process frame using YOLO model."""
+    def process_image_yolo(self, image_path):
+        """Process image using YOLO and track metrics."""
+        # Start MLFlow run
+        run_id = self.tracker.start_detection_run(
+            service_type="yolo",
+            model_name="yolov8n",
+            input_type="image"
+        )
+        
+        # Process image
         start_time = time.time()
-        
-        # Process frame with YOLO
-        results, _ = self.yolo.process_frame(frame)
-        
-        # Convert YOLO results to our Detection format
-        detections = []
-        for box in results.boxes:
-            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-            cls = int(box.cls[0].item())
-            conf = float(box.conf[0].item())
-            
-            # Convert to normalized coordinates (0-1)
-            height, width = frame.shape[:2]
-            det = Detection(
-                name=results.names[cls],
-                confidence=conf,
-                bounding_box={
-                    'Left': x1 / width,
-                    'Top': y1 / height,
-                    'Width': (x2 - x1) / width,
-                    'Height': (y2 - y1) / height
-                }
-            )
-            detections.append(det)
-        
+        results = self.yolo_model(image_path)
         end_time = time.time()
-        return end_time - start_time, detections
-    
-    def process_aws(self, frame) -> tuple[float, List[Detection]]:
-        """Process frame using AWS Rekognition."""
-        start_time = time.time()
         
-        # Convert frame to bytes
-        _, img_encoded = cv2.imencode('.jpg', frame)
-        img_bytes = img_encoded.tobytes()
+        # Calculate metrics
+        latency = (end_time - start_time) * 1000  # Convert to ms
+        fps = 1 / (end_time - start_time)
         
-        # Call AWS Rekognition
-        response = self.rekognition.detect_labels(
-            Image={'Bytes': img_bytes},
-            MaxLabels=10,
-            MinConfidence=70
+        # Extract detection results
+        detections = []
+        for r in results:
+            boxes = r.boxes
+            for box in boxes:
+                detections.append({
+                    "class": int(box.cls[0]),
+                    "confidence": float(box.conf[0]),
+                    "bbox": box.xyxy[0].tolist()
+                })
+        
+        # Log metrics
+        self.tracker.log_detection_metrics(
+            run_id,
+            metrics={
+                "fps": fps,
+                "latency_ms": latency,
+                "objects_detected": len(detections),
+                "avg_confidence": np.mean([d["confidence"] for d in detections]) if detections else 0
+            }
         )
         
-        # Convert response to our Detection format
+        # Log results
+        self.tracker.log_detection_results(run_id, detections)
+        
+        return results, run_id
+    
+    def process_image_aws(self, image_path):
+        """Process image using AWS Rekognition and track metrics."""
+        # Start MLFlow run
+        run_id = self.tracker.start_detection_run(
+            service_type="aws",
+            model_name="rekognition",
+            input_type="image"
+        )
+        
+        # Read image
+        with open(image_path, 'rb') as image:
+            image_bytes = image.read()
+        
+        # Process image
+        start_time = time.time()
+        response = self.rekognition.detect_labels(Image={'Bytes': image_bytes})
+        end_time = time.time()
+        
+        # Calculate metrics
+        latency = (end_time - start_time) * 1000  # Convert to ms
+        
+        # Extract detection results
         detections = []
         for label in response['Labels']:
-            if 'Instances' in label:
-                for instance in label['Instances']:
-                    if 'BoundingBox' in instance:
-                        det = Detection(
-                            name=label['Name'],
-                            confidence=label['Confidence'],
-                            bounding_box=instance['BoundingBox']
-                        )
-                        detections.append(det)
+            detections.append({
+                "class": label['Name'],
+                "confidence": label['Confidence'],
+                "instances": label.get('Instances', [])
+            })
         
-        end_time = time.time()
-        return end_time - start_time, detections
-    
-    def process_azure(self, frame) -> tuple[float, List[Detection]]:
-        """Process frame using Azure Computer Vision."""
-        start_time = time.time()
-        
-        # Convert frame to bytes
-        _, img_encoded = cv2.imencode('.jpg', frame)
-        img_bytes = img_encoded.tobytes()
-        
-        # Create a BytesIO object from the bytes
-        image_stream = BytesIO(img_bytes)
-        
-        # Call Azure Computer Vision
-        result = self.azure_client.detect_objects_in_stream(image_stream)
-        
-        # Convert response to our Detection format
-        detections = []
-        for obj in result.objects:
-            det = Detection(
-                name=obj.object_property,
-                confidence=obj.confidence,
-                bounding_box={
-                    'Left': obj.rectangle.x,
-                    'Top': obj.rectangle.y,
-                    'Width': obj.rectangle.w,
-                    'Height': obj.rectangle.h
-                }
-            )
-            detections.append(det)
-        
-        end_time = time.time()
-        return end_time - start_time, detections
-    
-    def run_comparison(self, video_path: str, num_frames: int = 50, delay: float = 1.0, confidence: float = 70.0):
-        """Run comparison test on video file."""
-        cap = cv2.VideoCapture(video_path)
-        frame_count = 0
-        
-        print(f"Starting comparison with {num_frames} frames...")
-        print(f"Video file: {video_path}")
-        print(f"Delay between frames: {delay} seconds")
-        print(f"Confidence threshold: {confidence}")
-        
-        while cap.isOpened() and frame_count < num_frames:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Process with each service
-            yolo_time, yolo_detections = self.process_yolo(frame)
-            aws_time, aws_detections = self.process_aws(frame)
-            azure_time, azure_detections = self.process_azure(frame)
-            
-            # Store results
-            self.results['yolo']['times'].append(yolo_time)
-            self.results['yolo']['detections'].append(yolo_detections)
-            self.results['aws']['times'].append(aws_time)
-            self.results['aws']['detections'].append(aws_detections)
-            self.results['azure']['times'].append(azure_time)
-            self.results['azure']['detections'].append(azure_detections)
-            
-            frame_count += 1
-            print(f"Processed frame {frame_count}/{num_frames}")
-            
-            # Add a small delay to respect rate limits
-            time.sleep(delay)
-            
-        cap.release()
-    
-    def analyze_results(self):
-        """Analyze and plot comparison results."""
-        # Convert timing results to DataFrame
-        df = pd.DataFrame({
-            'YOLO': self.results['yolo']['times'],
-            'AWS': self.results['aws']['times'],
-            'Azure': self.results['azure']['times']
-        })
-        
-        # Calculate statistics
-        stats = df.describe()
-        print("\nProcessing Time Statistics (seconds):")
-        print(stats)
-        
-        # Plot results
-        plt.figure(figsize=(10, 6))
-        df.boxplot()
-        plt.title('Processing Time Comparison')
-        plt.ylabel('Time (seconds)')
-        plt.savefig('ml/cloud_comparison/results/comparison_results.png')
-        plt.close()
-        
-        # Calculate detection statistics
-        yolo_detections = [len(dets) for dets in self.results['yolo']['detections']]
-        aws_detections = [len(dets) for dets in self.results['aws']['detections']]
-        azure_detections = [len(dets) for dets in self.results['azure']['detections']]
-        
-        print("\nDetection Statistics:")
-        print(f"YOLO - Average detections per frame: {np.mean(yolo_detections):.2f}")
-        print(f"AWS - Average detections per frame: {np.mean(aws_detections):.2f}")
-        print(f"Azure - Average detections per frame: {np.mean(azure_detections):.2f}")
-        
-        # Save detailed results
-        results_dict = {
-            'timing': {
-                'yolo': self.results['yolo']['times'],
-                'aws': self.results['aws']['times'],
-                'azure': self.results['azure']['times']
-            },
-            'detections': {
-                'yolo': yolo_detections,
-                'aws': aws_detections,
-                'azure': azure_detections
+        # Log metrics
+        self.tracker.log_detection_metrics(
+            run_id,
+            metrics={
+                "latency_ms": latency,
+                "objects_detected": len(detections),
+                "avg_confidence": np.mean([d["confidence"] for d in detections]) if detections else 0
             }
-        }
+        )
         
-        with open('ml/cloud_comparison/results/detailed_results.json', 'w') as f:
-            json.dump(results_dict, f, indent=4)
+        # Log cloud cost
+        self.tracker.log_cloud_cost(
+            run_id,
+            service_type="aws",
+            cost_details={
+                "api_call_cost": 0.0001,  # Example cost per API call
+                "total_cost": 0.0001
+            }
+        )
+        
+        # Log results
+        self.tracker.log_detection_results(run_id, detections)
+        
+        return response, run_id
+    
+    def process_image_azure(self, image_path):
+        """Process image using Azure Computer Vision and track metrics."""
+        # Start MLFlow run
+        run_id = self.tracker.start_detection_run(
+            service_type="azure",
+            model_name="computervision",
+            input_type="image"
+        )
+        
+        # Read image
+        with open(image_path, 'rb') as image:
+            image_bytes = image.read()
+        
+        # Process image
+        start_time = time.time()
+        response = self.azure_client.detect_objects_in_stream(image_bytes)
+        end_time = time.time()
+        
+        # Calculate metrics
+        latency = (end_time - start_time) * 1000  # Convert to ms
+        
+        # Extract detection results
+        detections = []
+        for obj in response.objects:
+            detections.append({
+                "class": obj.object_property,
+                "confidence": obj.confidence,
+                "bbox": [obj.rectangle.x, obj.rectangle.y, 
+                        obj.rectangle.x + obj.rectangle.w,
+                        obj.rectangle.y + obj.rectangle.h]
+            })
+        
+        # Log metrics
+        self.tracker.log_detection_metrics(
+            run_id,
+            metrics={
+                "latency_ms": latency,
+                "objects_detected": len(detections),
+                "avg_confidence": np.mean([d["confidence"] for d in detections]) if detections else 0
+            }
+        )
+        
+        # Log cloud cost
+        self.tracker.log_cloud_cost(
+            run_id,
+            service_type="azure",
+            cost_details={
+                "api_call_cost": 0.0001,  # Example cost per API call
+                "total_cost": 0.0001
+            }
+        )
+        
+        # Log results
+        self.tracker.log_detection_results(run_id, detections)
+        
+        return response, run_id
+    
+    def compare_services(self, image_path):
+        """Compare all services on the same image."""
+        # Process with all services
+        yolo_results, yolo_run_id = self.process_image_yolo(image_path)
+        aws_results, aws_run_id = self.process_image_aws(image_path)
+        azure_results, azure_run_id = self.process_image_azure(image_path)
+        
+        # Compare latency
+        latency_comparison = self.tracker.compare_services(
+            [yolo_run_id, aws_run_id, azure_run_id],
+            "latency_ms"
+        )
+        
+        # Compare detection counts
+        count_comparison = self.tracker.compare_services(
+            [yolo_run_id, aws_run_id, azure_run_id],
+            "objects_detected"
+        )
+        
+        # Compare confidence
+        confidence_comparison = self.tracker.compare_services(
+            [yolo_run_id, aws_run_id, azure_run_id],
+            "avg_confidence"
+        )
+        
+        return {
+            "latency": latency_comparison,
+            "detection_count": count_comparison,
+            "confidence": confidence_comparison
+        }
 
 def main():
-    # Set up argument parser
-    parser = argparse.ArgumentParser(description='Compare object detection services (YOLO, AWS, Azure)')
-    parser.add_argument('--frames', type=int, default=50,
-                      help='Number of frames to process (default: 50)')
-    parser.add_argument('--video', type=str, default='ml/data/test_videos/test.mp4',
-                      help='Path to the test video file (default: ml/data/test_videos/test.mp4)')
-    parser.add_argument('--delay', type=float, default=1.0,
-                      help='Delay between frames in seconds (default: 1.0)')
-    parser.add_argument('--confidence', type=float, default=70.0,
-                      help='Minimum confidence threshold for detections (default: 70.0)')
-    parser.add_argument('--output-dir', type=str, default='ml/cloud_comparison/results',
-                      help='Directory to save results (default: ml/cloud_comparison/results)')
+    """Main function to run service comparison."""
+    # Initialize comparator
+    comparator = CloudServiceComparator()
     
-    args = parser.parse_args()
+    # Test image path
+    image_path = "test_image.jpg"
     
-    # Create output directory if it doesn't exist
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Run comparison
+    results = comparator.compare_services(image_path)
     
-    # Initialize processor
-    processor = VideoProcessor()
-    
-    # Run comparison with command line arguments
-    print(f"Starting comparison with {args.frames} frames...")
-    print(f"Video file: {args.video}")
-    print(f"Delay between frames: {args.delay} seconds")
-    print(f"Confidence threshold: {args.confidence}")
-    
-    processor.run_comparison(
-        video_path=args.video,
-        num_frames=args.frames,
-        delay=args.delay,
-        confidence=args.confidence
-    )
-    
-    # Analyze results
-    processor.analyze_results()
+    # Print results
+    print("\nService Comparison Results:")
+    print("Latency (ms):", results["latency"])
+    print("Detection Count:", results["detection_count"])
+    print("Average Confidence:", results["confidence"])
 
 if __name__ == "__main__":
     main() 

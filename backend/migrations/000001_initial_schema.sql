@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS locations (
     description TEXT,
     latitude DOUBLE PRECISION NOT NULL,
     longitude DOUBLE PRECISION NOT NULL,
+    person_count INTEGER DEFAULT 0,
+    vehicle_count INTEGER DEFAULT 0,
+    avg_flow DOUBLE PRECISION DEFAULT 0.0,
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -93,18 +97,23 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Create triggers for updated_at
+-- Drop and recreate trigger for users
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at
-    BEFORE UPDATE ON users
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
+BEFORE UPDATE ON users
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
+-- Drop and recreate trigger for locations
+DROP TRIGGER IF EXISTS update_locations_updated_at ON locations;
 CREATE TRIGGER update_locations_updated_at
-    BEFORE UPDATE ON locations
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
+BEFORE UPDATE ON locations
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
 
+-- Drop and recreate trigger for models
+DROP TRIGGER IF EXISTS update_models_updated_at ON models;
 CREATE TRIGGER update_models_updated_at
-    BEFORE UPDATE ON models
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column(); 
+BEFORE UPDATE ON models
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();

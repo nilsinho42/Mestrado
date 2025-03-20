@@ -1,5 +1,5 @@
 import api from './api';
-import { Model, ModelMetrics, CloudMetrics } from '../types/model';
+import { Model, ModelMetrics, CloudMetric, CloudPerformanceMetric } from '../types/model';
 
 interface ModelRegistrationData {
     name: string;
@@ -37,12 +37,12 @@ export const compareModels = async (): Promise<Record<string, { avgProcessingTim
     return response.data;
 };
 
-export const getCloudCosts = async (): Promise<Record<string, CloudMetrics>> => {
+export const getCloudCosts = async (): Promise<Record<string, CloudMetric[]>> => {
     const response = await api.get('/cloud/costs');
     return response.data;
 };
 
-export const getCloudPerformance = async (): Promise<CloudMetrics[]> => {
+export const getCloudPerformance = async (): Promise<CloudPerformanceMetric[]> => {
     const response = await api.get('/cloud/performance');
     return response.data;
 };
