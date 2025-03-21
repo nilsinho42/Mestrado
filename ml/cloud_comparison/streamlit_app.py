@@ -24,6 +24,13 @@ def load_latest_results():
     with open(latest_file) as f:
         return json.load(f)
 
+def get_value_from_dict(d, *keys):
+    """Helper function to get value from dict with multiple possible keys."""
+    for key in keys:
+        if key in d:
+            return d[key]
+    return None
+
 def main():
     st.set_page_config(
         page_title="Cloud Vision Services Comparison",
@@ -38,6 +45,15 @@ def main():
         st.warning("No comparison results available yet. Please run a comparison first.")
         return
 
+    # Handle both camelCase and snake_case keys
+    processing_time = get_value_from_dict(results, 'processing_time', 'processingTime')
+    detections = get_value_from_dict(results, 'detections')
+    costs = get_value_from_dict(results, 'costs')
+
+    if not all([processing_time, detections, costs]):
+        st.error("Invalid results format. Missing required data.")
+        return
+
     # Create tabs for different visualizations
     tab1, tab2, tab3 = st.tabs(["Processing Time", "Detections", "Cost Analysis"])
 
@@ -46,9 +62,9 @@ def main():
         time_df = pd.DataFrame({
             'Service': ['YOLO', 'AWS Rekognition', 'Azure Computer Vision'],
             'Time (seconds)': [
-                results['processing_time']['yolo'],
-                results['processing_time']['aws'],
-                results['processing_time']['azure']
+                processing_time['yolo'],
+                processing_time['aws'],
+                processing_time['azure']
             ]
         })
         fig = px.bar(time_df, x='Service', y='Time (seconds)',
@@ -61,9 +77,9 @@ def main():
         detections_df = pd.DataFrame({
             'Service': ['YOLO', 'AWS Rekognition', 'Azure Computer Vision'],
             'Objects Detected': [
-                results['detections']['yolo'],
-                results['detections']['aws'],
-                results['detections']['azure']
+                detections['yolo'],
+                detections['aws'],
+                detections['azure']
             ]
         })
         fig = px.bar(detections_df, x='Service', y='Objects Detected',
@@ -76,9 +92,9 @@ def main():
         cost_df = pd.DataFrame({
             'Service': ['YOLO', 'AWS Rekognition', 'Azure Computer Vision'],
             'Cost (USD)': [
-                results['costs']['yolo'],
-                results['costs']['aws'],
-                results['costs']['azure']
+                costs['yolo'],
+                costs['aws'],
+                costs['azure']
             ]
         })
         fig = px.bar(cost_df, x='Service', y='Cost (USD)',
@@ -91,9 +107,9 @@ def main():
         cost_efficiency = pd.DataFrame({
             'Service': ['YOLO', 'AWS Rekognition', 'Azure Computer Vision'],
             'Cost per Detection (USD)': [
-                results['costs']['yolo'] / results['detections']['yolo'] if results['detections']['yolo'] > 0 else 0,
-                results['costs']['aws'] / results['detections']['aws'] if results['detections']['aws'] > 0 else 0,
-                results['costs']['azure'] / results['detections']['azure'] if results['detections']['azure'] > 0 else 0
+                costs['yolo'] / detections['yolo'] if detections['yolo'] > 0 else 0,
+                costs['aws'] / detections['aws'] if detections['aws'] > 0 else 0,
+                costs['azure'] / detections['azure'] if detections['azure'] > 0 else 0
             ]
         })
         fig = px.bar(cost_efficiency, x='Service', y='Cost per Detection (USD)',

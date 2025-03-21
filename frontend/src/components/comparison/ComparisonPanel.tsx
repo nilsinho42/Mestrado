@@ -5,7 +5,7 @@ import { UploadOutlined, LineChartOutlined } from '@ant-design/icons';
 const { Title, Text } = Typography;
 
 interface ComparisonResult {
-  processingTime: {
+  processing_time: {
     yolo: number;
     aws: number;
     azure: number;
@@ -20,11 +20,11 @@ interface ComparisonResult {
     aws: number;
     azure: number;
   };
-  dashboardUrl: string;
+  dashboard_url: string;
 }
 
 const ComparisonPanel: React.FC = () => {
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ComparisonResult | null>(null);
@@ -47,7 +47,7 @@ const ComparisonPanel: React.FC = () => {
         });
         
         const file = await fileHandle.getFile();
-        setSelectedFile(file.name);
+        setSelectedFile(file);
         setError(null);
       } else {
         // Fallback to traditional file input
@@ -63,7 +63,7 @@ const ComparisonPanel: React.FC = () => {
   const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      setSelectedFile(file.name);
+      setSelectedFile(file);
       setError(null);
     }
   };
@@ -75,18 +75,17 @@ const ComparisonPanel: React.FC = () => {
     setError(null);
 
     try {
-      const response = await fetch('/api/comparison/start', {
+      const formData = new FormData();
+      formData.append('video', selectedFile);
+
+      const response = await fetch('http://localhost:8000/api/comparison/start', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          videoPath: selectedFile,
-        }),
+        body: formData,
       });
 
       if (!response.ok) {
-        throw new Error('Failed to start comparison');
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to start comparison');
       }
 
       const data = await response.json() as ComparisonResult;
@@ -100,8 +99,8 @@ const ComparisonPanel: React.FC = () => {
   };
 
   const openDashboard = () => {
-    if (result?.dashboardUrl) {
-      window.open(result.dashboardUrl, '_blank', 'noopener,noreferrer');
+    if (result?.dashboard_url) {
+      window.open(result.dashboard_url, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -128,7 +127,7 @@ const ComparisonPanel: React.FC = () => {
             >
               Select Video
             </Button>
-            {selectedFile && <Text type="secondary">{selectedFile}</Text>}
+            {selectedFile && <Text type="secondary">{selectedFile.name}</Text>}
           </Space>
         </div>
 
@@ -161,11 +160,11 @@ const ComparisonPanel: React.FC = () => {
             <Title level={4}>3. Results</Title>
             <Space direction="vertical">
               <Card size="small" title="Processing Time (seconds)">
-                <Text>YOLO: {result.processingTime.yolo.toFixed(3)}</Text>
+                <Text>YOLO: {result.processing_time.yolo.toFixed(3)}</Text>
                 <br />
-                <Text>AWS: {result.processingTime.aws.toFixed(3)}</Text>
+                <Text>AWS: {result.processing_time.aws.toFixed(3)}</Text>
                 <br />
-                <Text>Azure: {result.processingTime.azure.toFixed(3)}</Text>
+                <Text>Azure: {result.processing_time.azure.toFixed(3)}</Text>
               </Card>
 
               <Card size="small" title="Detections">
