@@ -4,16 +4,45 @@ import { UploadOutlined, LineChartOutlined } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
 
+interface Detection {
+  frame_number: number;
+  class: string;
+  confidence: number;
+  bbox: number[];
+  service: string;
+}
+
 interface ComparisonResult {
+  video_info: {
+    total_frames: number;
+    fps: number;
+    duration_seconds: number;
+    sampled_frames: number;
+    frame_indices: number[];
+  };
   processing_time: {
     yolo: number;
     aws: number;
     azure: number;
   };
   detections: {
+    yolo: Detection[];
+    aws: Detection[];
+    azure: Detection[];
+  };
+  total_detections: {
     yolo: number;
     aws: number;
     azure: number;
+  };
+  frames: {
+    total: number;
+    sampled: number;
+    processed: {
+      yolo: number;
+      aws: number;
+      azure: number;
+    }
   };
   costs: {
     yolo: number;
@@ -21,6 +50,11 @@ interface ComparisonResult {
     azure: number;
   };
   dashboard_url: string;
+  saved_frames: {
+    yolo: string[];
+    aws: string[];
+    azure: string[];
+  };
 }
 
 const ComparisonPanel: React.FC = () => {
@@ -78,7 +112,7 @@ const ComparisonPanel: React.FC = () => {
       const formData = new FormData();
       formData.append('video', selectedFile);
 
-      const response = await fetch('http://localhost:8000/api/comparison/start', {
+      const response = await fetch('http://localhost:8000/start_comparison', {
         method: 'POST',
         body: formData,
       });
@@ -159,6 +193,24 @@ const ComparisonPanel: React.FC = () => {
           <div>
             <Title level={4}>3. Results</Title>
             <Space direction="vertical">
+              <Card size="small" title="Video Information">
+                <Text>Total Frames: {result.video_info.total_frames}</Text>
+                <br />
+                <Text>FPS: {result.video_info.fps}</Text>
+                <br />
+                <Text>Duration: {result.video_info.duration_seconds.toFixed(2)} seconds</Text>
+                <br />
+                <Text>Sampled Frames: {result.video_info.sampled_frames}</Text>
+              </Card>
+
+              <Card size="small" title="Frames Processed">
+                <Text>YOLO: {result.frames.processed.yolo} / {result.frames.sampled}</Text>
+                <br />
+                <Text>AWS: {result.frames.processed.aws} / {result.frames.sampled}</Text>
+                <br />
+                <Text>Azure: {result.frames.processed.azure} / {result.frames.sampled}</Text>
+              </Card>
+
               <Card size="small" title="Processing Time (seconds)">
                 <Text>YOLO: {result.processing_time.yolo.toFixed(3)}</Text>
                 <br />
@@ -167,12 +219,12 @@ const ComparisonPanel: React.FC = () => {
                 <Text>Azure: {result.processing_time.azure.toFixed(3)}</Text>
               </Card>
 
-              <Card size="small" title="Detections">
-                <Text>YOLO: {result.detections.yolo}</Text>
+              <Card size="small" title="Total Detections">
+                <Text>YOLO: {result.total_detections.yolo}</Text>
                 <br />
-                <Text>AWS: {result.detections.aws}</Text>
+                <Text>AWS: {result.total_detections.aws}</Text>
                 <br />
-                <Text>Azure: {result.detections.azure}</Text>
+                <Text>Azure: {result.total_detections.azure}</Text>
               </Card>
 
               <Card size="small" title="Estimated Cost (USD)">

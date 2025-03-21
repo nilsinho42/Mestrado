@@ -46,85 +46,48 @@ app.add_middleware(
 class ComparisonRequest(BaseModel):
     videoPath: str
 
-@app.post("/api/comparison/start")
+@app.post("/start_comparison")
 async def start_comparison(video: UploadFile = File(...)):
+    """Start video comparison between services."""
     try:
-        # Verify cloud credentials
-        if not os.getenv('AWS_ACCESS_KEY_ID') or not os.getenv('AWS_SECRET_ACCESS_KEY'):
-            raise HTTPException(
-                status_code=500,
-                detail="AWS credentials not configured. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables."
-            )
+        # Create temporary file to store uploaded video
+        temp_dir = tempfile.mkdtemp()
+        temp_video_path = os.path.join(temp_dir, video.filename)
         
-        if not os.getenv('AZURE_ENDPOINT') or not os.getenv('AZURE_KEY'):
-            raise HTTPException(
-                status_code=500,
-                detail="Azure credentials not configured. Please set AZURE_ENDPOINT and AZURE_KEY environment variables."
-            )
-
-        # Create a temporary directory to store the uploaded video
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video.filename)[1]) as temp_video:
-            # Copy uploaded file to temporary file
-            shutil.copyfileobj(video.file, temp_video)
-            temp_video_path = temp_video.name
-
         try:
-            # Initialize the comparator
-            comparator = CloudServiceComparator()
+            # Save uploaded file
+            with open(temp_video_path, "wb") as buffer:
+                shutil.copyfileobj(video.file, buffer)
             
-            # Process with all services using the temporary file path
+            # Initialize comparator and process video
+            comparator = CloudServiceComparator()
             results = comparator.compare_services(temp_video_path)
             
-            # Format results for frontend
+            # Format results for response
             formatted_results = {
-                "processing_time": {
-                    "yolo": results["latency"]["yolo"],
-                    "aws": results["latency"]["aws"],
-                    "azure": results["latency"]["azure"]
-                },
-                "detections": {
-                    "yolo": results["detections"]["yolo"],
-                    "aws": results["detections"]["aws"],
-                    "azure": results["detections"]["azure"]
-                },
-                "costs": {
-                    "yolo": 0.0,  # Local processing cost
-                    "aws": 0.0001,  # Example cost from AWS
-                    "azure": 0.0001  # Example cost from Azure
-                },
-                "dashboard_url": "http://localhost:8501",  # Your Streamlit dashboard URL
-                "saved_frames": results.get("saved_frames", {})  # Add saved frame paths
+                "video_info": results["video_info"],
+                "processing_time": results["processing_time"],
+                "total_detections": results["total_detections"],
+                "frames": results["frames"],
+                "costs": results["costs"],
+                "dashboard_url": results["dashboard_url"],
+                "saved_frames": results["saved_frames"],
+                "detections": results["detections"]
             }
-
-            # Save results for the Streamlit dashboard
-            results_dir = Path(__file__).parent.parent / "cloud_comparison" / "results"
-            results_dir.mkdir(parents=True, exist_ok=True)
             
+            # Save results to file
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            result_file = results_dir / f"comparison_results_{timestamp}.json"
+            results_path = Path("cloud_comparison/results") / f"comparison_results_{timestamp}.json"
+            results_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Log the results before saving
-            logger.debug(f"Saving results to {result_file}:")
-            logger.debug(json.dumps(formatted_results, indent=2))
-            
-            with open(result_file, "w") as f:
+            with open(results_path, "w") as f:
                 json.dump(formatted_results, f, indent=2)
-                
-            # Verify the saved file
-            with open(result_file) as f:
-                saved_data = json.load(f)
-                logger.debug("Verified saved data:")
-                logger.debug(json.dumps(saved_data, indent=2))
-
+            
             return formatted_results
             
         finally:
-            # Clean up: remove the temporary file
-            try:
-                os.unlink(temp_video_path)
-            except Exception as e:
-                logger.warning(f"Failed to remove temporary file {temp_video_path}: {e}")
+            # Clean up temporary files
+            shutil.rmtree(temp_dir)
             
     except Exception as e:
-        logger.error(f"Error in comparison: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) 
