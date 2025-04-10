@@ -38,3 +38,4 @@ yarn-error.log*
 .specstory/history/.what-is-this.md
 ml/cloud_comparison/annotated_frames/
 ml/cloud_comparison/results/
+papers/
