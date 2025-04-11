@@ -1,0 +1,81 @@
+For Python 3.8+:
+# Download Python installer from https://www.python.org/downloads/
+# After installation, verify with:
+python --version
+
+For Docker Desktop:
+# Download from https://www.docker.com/products/docker-desktop
+# After installation, verify with:
+docker --version
+docker-compose --version
+
+For PostgreSQL:
+# Download from https://www.postgresql.org/download/windows/
+# During installation, set password for postgres user
+# After installation, verify with: psql --version
+
+For Node.js:
+# Download from https://nodejs.org/
+# After installation, verify with:
+node --version
+npm --version
+
+For Go:
+# Download from https://golang.org/dl/
+# After installation, verify with: go version
+
+Clone the repository:
+git clone https://github.com/yourusername/cloud-object-detection.git
+cd cloud-object-detection
+
+Set up Python environment and install dependencies:
+pip install -r requirements.txt
+
+Install Go dependencies:
+cd backend
+go mod download
+cd ..
+
+Install Node.js dependencies:
+cd frontend
+npm install
+cd ..
+
+Set up environment variables: .env 
+
+Create PostgreSQL database:
+# Use the createdb command: createdb -U postgres object_detection
+
+Start the application using Docker Compose: docker-compose up -d --build
+
+Verify running services: docker-compose ps
+
+For AWS setup:
+# Install AWS CLI: pip install awscli
+# Configure AWS CLI: aws configure
+# Enter your AWS_ACCESS_KEY_ID
+# Enter your AWS_SECRET_ACCESS_KEY
+# Enter your AWS_DEFAULT_REGION
+# Enter output format (json recommended)
+# Create S3 bucket: aws s3 mb s3://ntp-cv-bucket
+
+For Azure setup:
+# Install Azure CLI:
+# Download from https://docs.microsoft.com/en-us/cli/azure/install-azure-cli-windows
+# Login to Azure: az login
+# Create resource group: az group create --name cvmestrado --location brazilsouth
+# Create Cognitive Services resource: az cognitiveservices account create --name cvmestrado --resource-group cvmestrado --kind ComputerVision --sku S1 --location brazilsouth
+# Get the key for Cognitive Services: az cognitiveservices account keys list --name cvmestrado --resource-group cvmestrado
+# Create Storage account: az storage account create --name mestrado --resource-group cvmestrado --location brazilsouth --sku Standard_LRS
+# Get storage connection string: az storage account show-connection-string --name mestrado --resource-group cvmestrado
+# Create container in storage account: az storage container create --name cv-mestrado --connection-string "YOUR_CONNECTION_STRING"
+
+Access the frontend application:
+# Open browser and navigate to: http://localhost:3000
+
+Stop the application:
+docker-compose down
+
+To run the ML service separately:
+cd ml
+python run_servers.py
