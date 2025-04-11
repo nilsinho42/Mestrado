@@ -1,39 +1,24 @@
-import subprocess
+"""
+Script to run the API server.
+"""
+
 import sys
 import time
 from pathlib import Path
 
 def run_servers():
-    # Get the current directory
-    current_dir = Path(__file__).parent
-
+    """Run the API server."""
     try:
-        # Start FastAPI server
-        fastapi_process = subprocess.Popen(
-            [sys.executable, str(current_dir / "api" / "main.py")],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        print("FastAPI server started on http://localhost:8000")
-
-        # Start Streamlit server
-        streamlit_process = subprocess.Popen(
-            [sys.executable, "-m", "streamlit", "run", 
-             str(current_dir / "cloud_comparison" / "streamlit_app.py")],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        print("Streamlit server started on http://localhost:8501")
-
-        # Keep the script running
-        while True:
-            time.sleep(1)
-
+        # Import and start the API server
+        from api import start
+        print("Starting API server...")
+        start()
     except KeyboardInterrupt:
-        print("\nShutting down servers...")
-        fastapi_process.terminate()
-        streamlit_process.terminate()
+        print("\nShutting down server...")
         sys.exit(0)
+    except Exception as e:
+        print(f"Error starting server: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     run_servers() 

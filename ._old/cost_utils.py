@@ -263,4 +263,65 @@ class CostCalculator:
             
         except Exception as e:
             print(f"Error authenticating with Azure: {e}")
-            return False 
+            return False
+
+    def calculate_aws_cost(self, metrics: Dict[str, Any]) -> Dict[str, float]:
+        """Calculate AWS cost based on metrics.
+        
+        Args:
+            metrics: Metrics dictionary
+            
+        Returns:
+            Dictionary with cost breakdown
+        """
+        # Get AWS parameters
+        rekognition_image_cost = self.config.getfloat('aws', 'rekognition_image_analysis_per_image')
+        rekognition_video_cost = self.config.getfloat('aws', 'rekognition_video_analysis_per_minute')
+        s3_storage_cost = self.config.getfloat('aws', 's3_storage_per_gb_per_month')
+        s3_put_cost = self.config.getfloat('aws', 's3_put_request_per_1000')
+        s3_get_cost = self.config.getfloat('aws', 's3_get_request_per_1000')
+        fargate_vcpu_cost = self.config.getfloat('aws', 'fargate_per_vcpu_hour')
+        fargate_memory_cost = self.config.getfloat('aws', 'fargate_per_gb_memory_hour') 
+        fargate_data_transfer = self.config.getfloat('aws', 'fargate_data_transfer_per_gb')
+        
+        # Calculate object detection cost
+        num_images = metrics.get('task_a_metrics', {}).get('aws', {}).get('images_processed', 0)
+        object_detection_cost = rekognition_image_cost * num_images
+        
+        # Calculate S3 storage cost
+        # Assume average image size of 500KB and video size of 10MB
+        image_storage_gb = (num_images * 500 * 1024) / (1024 * 1024 * 1024)
+        video_count = metrics.get('task_b_metrics', {}).get('aws', {}).get('videos_processed', 0)
+        video_storage_gb = (video_count * 10) / 1024
+        total_storage_gb = image_storage_gb + video_storage_gb
+        storage_cost = s3_storage_cost * total_storage_gb
+        
+        # Calculate S3 request cost
+        put_requests = num_images + video_count  # One put per image/video
+        get_requests = num_images + video_count  # One get per image/video for processing
+        request_cost = (s3_put_cost * put_requests / 1000) + (s3_get_cost * get_requests / 1000)
+        
+        # Calculate Fargate compute cost
+        processing_time_seconds = metrics.get('task_b_metrics', {}).get('aws', {}).get('total_processing_time', 0)
+        processing_time_hours = processing_time_seconds / 3600.0
+        
+        # Assuming 0.5 vCPU and 1GB memory for each Fargate task
+        compute_cost = (fargate_vcpu_cost * 0.5 * processing_time_hours) + \
+                       (fargate_memory_cost * 1.0 * processing_time_hours)
+        
+        # Calculate data transfer cost
+        # Assuming average of 1MB per image and the full video size for video processing
+        data_transfer_gb = ((num_images * 1024 * 1024) + (video_count * 10 * 1024 * 1024)) / (1024 * 1024 * 1024)
+        transfer_cost = fargate_data_transfer * data_transfer_gb
+        
+        # Calculate total cost
+        total_cost = object_detection_cost + storage_cost + request_cost + compute_cost + transfer_cost
+        
+        return {
+            'object_detection_cost': object_detection_cost,
+            'storage_cost': storage_cost,
+            'request_cost': request_cost,
+            'compute_cost': compute_cost,
+            'transfer_cost': transfer_cost,
+            'total_cost': total_cost
+        } 

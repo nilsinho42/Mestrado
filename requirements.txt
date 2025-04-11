@@ -1,35 +1,63 @@
-# ML Libraries
-tensorflow>=2.13.0
-torch>=2.0.0
-torchvision>=0.15.0
-opencv-python>=4.8.0
-scikit-learn>=1.3.0
-numpy>=1.24.0
-pandas>=2.0.0
-albumentations>=1.3.1
-ultralytics>=8.0.0  # For YOLOv8
+# Core ML/DL
+torch>=2.1.1
+torchvision>=0.16.1
+numpy>=1.26.2
 
-# MLOps
-mlflow>=2.7.0
-kubeflow>=1.8
-apache-airflow>=2.7.0
+# Computer Vision
+opencv-python>=4.8.1.78
+albumentations>=1.3.0
+ultralytics>=8.0.0  # for YOLOv8
+Pillow>=10.1.0
 
-# Cloud SDKs
-boto3>=1.28.0  # AWS
-azure-ai-ml>=1.10.0  # Azure
-google-cloud-storage>=2.10.0  # GCP
-
-# Monitoring and Logging
-wandb>=0.15.0
-tensorboard>=2.13.0
-
-# API and Utils
-fastapi>=0.103.0
-uvicorn>=0.23.0
-python-dotenv>=1.0.0
+# Data Processing
 pyyaml>=6.0.1
-pytest>=7.4.0
+gdown>=5.1.0  # for downloading datasets
+scikit-learn>=1.3.2
+scipy>=1.11.3
+lap>=0.4.0  # Linear Assignment Problem solver for DeepSORT
 
-# Visualization
-matplotlib>=3.7.0
-seaborn>=0.12.0 
+# API and Web
+fastapi>=0.104.1
+uvicorn>=0.24.0
+pandas>=2.1.3
+plotly>=5.18.0
+aiofiles>=23.2.1
+python-multipart>=0.0.6
+
+# Database
+psycopg2-binary>=2.9.9
+SQLAlchemy>=2.0.23
+
+# AWS Services
+boto3>=1.29.0  # AWS SDK
+
+# Azure Services
+azure-storage-blob>=12.19.0  # Azure Blob Storage
+azure-cognitiveservices-vision-computervision>=0.9.0  # Azure Computer Vision
+azure-identity>=1.14.1  # Azure Authentication
+msrest>=0.6.21
+
+# Utilities
+python-jose[cryptography]>=3.3.0
+pydantic>=2.4.2
+psutil>=5.9.6
+tenacity>=8.2.3
+python-dotenv>=1.0.0
+requests>=2.31.0
+aiohttp>=3.9.1
+matplotlib>=3.8.2
+seaborn>=0.13.0
+configparser>=6.0.0
+tqdm>=4.62.0
+
+# Tracing and Metrics
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
+opentelemetry-instrumentation-fastapi>=0.42b0
+opentelemetry-instrumentation-sqlite3>=0.42b0
+opentelemetry-instrumentation-requests>=0.42b0
+opentelemetry-exporter-otlp-proto-grpc>=1.21.0
+prometheus-client>=0.19.0
+
+# Service Discovery
+python-consul==1.1.0 

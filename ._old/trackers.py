@@ -562,4 +562,197 @@ class AzureContainerAppTracker(ObjectTracker):
         """Clean up resources."""
         # Close session
         if hasattr(self, 'session'):
+            self.session.close()
+
+# AWS Fargate Tracker implementation
+class AWSFargateTracker(ObjectTracker):
+    def __init__(self, name: str = "aws_fargate"):
+        """Initialize AWS Fargate tracker.
+        
+        Args:
+            name: Tracker name
+        """
+        super().__init__(name=name)
+        
+        # Get AWS Fargate endpoint from environment
+        self.endpoint = os.getenv('AWS_FARGATE_ENDPOINT', '').rstrip('/')
+        if not self.endpoint:
+            logger.warning("AWS_FARGATE_ENDPOINT not set or empty. AWS Fargate tracking will not work.")
+        
+        # Define people and vehicle classes (same as IoUTracker for consistency)
+        self.people_classes = ['person', 'Person', 'people', 'People', 'pedestrian', 'Pedestrian']
+        self.vehicle_classes = [
+            'car', 'Car', 'vehicle', 'Vehicle', 'truck', 'Truck', 
+            'bus', 'Bus', 'motorcycle', 'Motorcycle', 'bicycle', 'Bicycle'
+        ]
+        
+        # Initialize track mapping
+        self.track_mapping = {}  # Maps AWS track_id to our internal object_id
+        
+        # Initialize session for HTTP requests
+        self._initialize_http_session()
+        
+        # Store video ID for tracking session
+        self.video_id = str(uuid.uuid4())
+        
+        logger.info(f"Initialized {name} tracker with endpoint: {self.endpoint}")
+        
+        # Check if endpoint is reachable
+        self._check_endpoint()
+    
+    def _initialize_http_session(self):
+        """Initialize HTTP session."""
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        })
+    
+    def _check_endpoint(self):
+        """Check if endpoint is reachable."""
+        if not self.endpoint:
+            return
+        
+        try:
+            response = self.session.get(f"{self.endpoint}/healthcheck", timeout=5)
+            if response.status_code == 200:
+                logger.info(f"AWS Fargate endpoint is reachable: {response.json()}")
+            else:
+                logger.warning(f"AWS Fargate endpoint returned status {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Failed to reach AWS Fargate endpoint: {e}")
+    
+    def update(self, detections: List[Detection], frame_idx: int) -> List[TrackedObject]:
+        """Update tracker by sending detections to AWS Fargate.
+        
+        Args:
+            detections: List of Detection objects
+            frame_idx: Current frame index
+            
+        Returns:
+            List of active TrackedObject instances
+        """
+        self.current_frame = frame_idx
+        
+        if not self.endpoint:
+            logger.warning("AWS_FARGATE_ENDPOINT not set. Falling back to IoU tracking.")
+            # Fall back to IoU tracking if endpoint not set
+            if not hasattr(self, 'fallback_tracker'):
+                self.fallback_tracker = IoUTracker(name=f"{self.name}_fallback")
+            return self.fallback_tracker.update(detections, frame_idx)
+        
+        try:
+            # Convert frame for the first detection to base64
+            # (this assumes all detections are from the same frame)
+            frame = None
+            if detections and hasattr(detections[0], '_frame'):
+                frame = detections[0]._frame
+            
+            # If frame is not available, we can still send detections
+            if frame is None:
+                logger.debug("No frame available, sending only detections")
+            
+            # Convert detections to format expected by Fargate app
+            detection_data = []
+            for det in detections:
+                detection_data.append({
+                    'box': det.box,
+                    'class_id': det.class_id,
+                    'class_name': det.class_name,
+                    'confidence': det.confidence
+                })
+            
+            # Prepare request data
+            request_data = {
+                'frame_idx': frame_idx,
+                'detections': detection_data,
+                'video_id': self.video_id
+            }
+            
+            # Add frame data if available
+            if frame is not None:
+                _, img_encoded = cv2.imencode('.jpg', frame)
+                img_base64 = base64.b64encode(img_encoded).decode('utf-8')
+                request_data['image'] = img_base64
+            
+            # Send request to Fargate
+            response = self.session.post(
+                f"{self.endpoint}/api/track",
+                json=request_data,
+                timeout=30  # Longer timeout for video processing
+            )
+            
+            # Check response
+            if response.status_code != 200:
+                logger.error(f"Failed to send tracking request to AWS Fargate: {response.status_code} {response.text}")
+                return []
+            
+            # Parse response
+            result = response.json()
+            
+            # Update our tracking objects based on container app results
+            self._update_tracks_from_response(result, frame_idx)
+            
+            return self.get_active_tracks()
+            
+        except Exception as e:
+            logger.error(f"Error sending tracking request to AWS Fargate: {e}", exc_info=True)
+            return []
+    
+    def _update_tracks_from_response(self, response: Dict[str, Any], frame_idx: int):
+        """Update tracking objects based on Fargate response.
+        
+        Args:
+            response: Response from Fargate
+            frame_idx: Current frame index
+        """
+        # Extract tracks from response
+        tracks = response.get('tracks', [])
+        
+        # Update our tracking objects
+        for track in tracks:
+            # Get track_id from response
+            track_id = track.get('track_id')
+            if track_id is None:
+                continue
+            
+            # Map to our internal object_id if exists, or create new
+            if track_id not in self.track_mapping:
+                self.track_mapping[track_id] = self.next_id
+                self.next_id += 1
+            
+            object_id = self.track_mapping[track_id]
+            
+            # Get or create TrackedObject
+            if object_id not in self.tracks:
+                # Create new TrackedObject
+                self.tracks[object_id] = TrackedObject(
+                    object_id=object_id,
+                    class_id=track.get('class_id', 0),
+                    class_name=track.get('class_name', 'unknown')
+                )
+            
+            # Update TrackedObject with new data
+            box = track.get('box', [0, 0, 0, 0])
+            confidence = track.get('confidence', 0.0)
+            self.tracks[object_id].update(frame_idx, box, confidence)
+    
+    def reset(self):
+        """Reset tracker state and also reset tracking on Fargate."""
+        super().reset()
+        self.track_mapping = {}
+        self.video_id = str(uuid.uuid4())
+        
+        # Reset tracking on Fargate
+        if self.endpoint:
+            try:
+                response = self.session.post(f"{self.endpoint}/api/reset/{self.video_id}")
+                logger.info(f"Reset tracking on AWS Fargate: {response.status_code}")
+            except Exception as e:
+                logger.error(f"Failed to reset tracking on AWS Fargate: {e}")
+    
+    def __del__(self):
+        """Clean up resources."""
+        # Close session
+        if hasattr(self, 'session'):
             self.session.close() 

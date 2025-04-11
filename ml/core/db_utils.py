@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 import json
 from typing import Dict, Any, List, Union
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from root directory
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env'))
 
 class Database:
     def __init__(self):

@@ -45,7 +45,7 @@ This project implements a video processing pipeline that analyzes videos using m
 
 2. Install dependencies:
    ```
-   pip install -r requirements.txt
+   pip install -r ../requirements.txt
    ```
 
 3. Configure environment variables in `.env` file:
@@ -70,6 +70,7 @@ This project implements a video processing pipeline that analyzes videos using m
    AZURE_STORAGE_ACCOUNT=your_storage_account
    AZURE_CONTAINER_NAME=your-container-name
    AZURE_DEEPSORT_ENDPOINT=https://your-deepsort-app.region.azurecontainerapps.io
+   AWS_FARGATE_ENDPOINT=https://your-fargate-endpoint.region.amazonaws.com
    ```
 
 4. Update cost parameters in `cost_config.ini` file with actual cloud provider pricing.
@@ -88,17 +89,100 @@ The application automatically creates the necessary tables when started, but you
 CREATE DATABASE ml_comparison;
 ```
 
-### (Optional) Azure Container App for DeepSORT tracking
+### Cloud Tracker Services
 
-The pipeline can use an Azure Container App for DeepSORT tracking. To deploy it:
+This pipeline can use containerized object tracking services in the cloud for better scalability and performance:
 
-```bash
-cd cloud/azure
-docker build -t your-dockerhub-username/deepsort-tracker:latest .
-docker push your-dockerhub-username/deepsort-tracker:latest
+#### Azure Container App for DeepSORT tracking
+
+The pipeline can use an Azure Container App for DeepSORT tracking. Set the endpoint in your `.env` file:
+```
+AZURE_DEEPSORT_ENDPOINT=https://your-deepsort-app.region.azurecontainerapps.io
 ```
 
-Then create an Azure Container App using the Docker Hub image.
+#### AWS Fargate for DeepSORT tracking
+
+The pipeline can use AWS Fargate for DeepSORT tracking. Set the endpoint in your `.env` file:
+```
+AWS_FARGATE_ENDPOINT=https://your-fargate-endpoint.region.amazonaws.com
+```
+
+### Deploying the Cloud Tracker Services
+
+For improved performance, the DeepSORT tracking can be offloaded to cloud container services:
+
+#### Azure Container App Deployment
+
+1. Build the Docker image:
+   ```bash
+   cd cloud/azure
+   docker build -t your-dockerhub-username/deepsort-tracker:latest .
+   docker push your-dockerhub-username/deepsort-tracker:latest
+   ```
+
+2. Create an Azure Container App using the Azure Portal or Azure CLI:
+   ```bash
+   az containerapp create \
+     --name deepsort-tracker \
+     --resource-group your-resource-group \
+     --environment your-environment \
+     --image your-dockerhub-username/deepsort-tracker:latest \
+     --target-port 8080 \
+     --ingress external \
+     --cpu 0.5 \
+     --memory 1.0Gi
+   ```
+
+3. Update `.env` with the Container App URL
+
+#### AWS Fargate Deployment
+
+1. Build the Docker image:
+   ```bash
+   cd cloud/aws
+   docker build -t your-dockerhub-username/deepsort-tracker-aws:latest .
+   docker push your-dockerhub-username/deepsort-tracker-aws:latest
+   ```
+
+2. Create an AWS ECR repository (optional):
+   ```bash
+   aws ecr create-repository --repository-name deepsort-tracker
+   ```
+
+3. Create an ECS task definition and service using Fargate:
+   ```bash
+   # Create task definition
+   aws ecs register-task-definition \
+     --family deepsort-tracker \
+     --requires-compatibilities FARGATE \
+     --network-mode awsvpc \
+     --cpu 0.5 \
+     --memory 1GB \
+     --execution-role-arn arn:aws:iam::your-account:role/ecsTaskExecutionRole \
+     --container-definitions '[{
+         "name": "deepsort-tracker",
+         "image": "your-dockerhub-username/deepsort-tracker-aws:latest",
+         "essential": true,
+         "portMappings": [{
+           "containerPort": 8080,
+           "hostPort": 8080,
+           "protocol": "tcp"
+         }]
+       }]'
+   
+   # Create service
+   aws ecs create-service \
+     --cluster your-cluster \
+     --service-name deepsort-tracker \
+     --task-definition deepsort-tracker \
+     --desired-count 1 \
+     --launch-type FARGATE \
+     --network-configuration "awsvpcConfiguration={subnets=[subnet-id],securityGroups=[sg-id],assignPublicIp=ENABLED}"
+   ```
+
+4. Set up an Application Load Balancer to route traffic to your Fargate service
+
+5. Update `.env` with the ALB endpoint URL
 
 ## Usage
 

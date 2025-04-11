@@ -28,7 +28,7 @@ TEMP_DIR = Path("./tmp")
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # Create FastAPI app
-app = FastAPI(title="DeepSORT Tracking API", version="1.0.0")
+app = FastAPI(title="AWS Fargate DeepSORT Tracking API", version="1.0.0")
 
 # Add CORS middleware
 app.add_middleware(
@@ -505,7 +505,7 @@ tracking_sessions = {}
 
 @app.get("/")
 async def root():
-    return {"message": "DeepSORT Tracking API"}
+    return {"message": "AWS Fargate DeepSORT Tracking API"}
 
 @app.post("/api/track", response_model=TrackingResult)
 async def track_objects(data: ImageData):

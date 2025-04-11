@@ -67,7 +67,6 @@ cloud:
 # MLOps configuration
 mlops:
   experiment_tracking:
-    mlflow_tracking_uri: "http://localhost:5000"
     wandb_project: "object-detection-flow"
   
   deployment:

@@ -35,21 +35,10 @@ class Settings(BaseSettings):
     SQLITE_DB_PATH: str = "processing_status.db"
     POSTGRES_DSN: str = Field(..., regex=r"^postgresql://.*")
     
-    # Monitoring Configuration
-    OTLP_ENDPOINT: str = "http://localhost:4317"
-    PUSHGATEWAY_URL: str = "localhost:9091"
+    # Logging Configuration
     LOG_LEVEL: str = "INFO"
     
-    # Service Discovery
-    CONSUL_HOST: str = "localhost"
-    CONSUL_PORT: int = 8500
-    CONSUL_SCHEME: str = "http"
-    SERVICE_REGISTRATION_INTERVAL: int = 10  # seconds
-    SERVICE_DEREGISTRATION_TTL: int = 30  # seconds
-    
-    # Circuit Breaker
-    CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 5
-    CIRCUIT_BREAKER_RESET_TIMEOUT: int = 60
+    # Note: Monitoring Configuration (OTLP_ENDPOINT, PUSHGATEWAY_URL) has been removed as it wasn't being used
     
     @validator("VIDEO_UPLOAD_DIR")
     def create_upload_dir(cls, v):

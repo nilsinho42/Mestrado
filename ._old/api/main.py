@@ -17,8 +17,6 @@ import uuid
 from .processing import VideoProcessor
 from .storage import ProcessingStorage
 from .tracing import setup_tracing
-from .metrics import MetricsCollector
-from .discovery import ServiceDiscovery
 from .config import settings
 
 # Configure logging
@@ -48,33 +46,8 @@ except Exception as e:
     logger.error(f"Failed to initialize services: {str(e)}")
     raise
 
-metrics = MetricsCollector()
-service_discovery = ServiceDiscovery()
-
-# Set up tracing
+# Set up tracing - Note: This provides automatic instrumentation for FastAPI, SQLite and requests
 setup_tracing(app, settings.SERVICE_NAME)
-
-@app.on_event("startup")
-async def startup_event():
-    """Register service with Consul on startup."""
-    try:
-        await service_discovery.register(
-            port=settings.PORT,
-            tags=["ml", "video-processing"]
-        )
-        logger.info("Service registered with Consul")
-    except Exception as e:
-        logger.error(f"Failed to register service with Consul: {str(e)}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Deregister service from Consul on shutdown."""
-    try:
-        await service_discovery.deregister()
-        logger.info("Service deregistered from Consul")
-    except Exception as e:
-        logger.error(f"Failed to deregister service from Consul: {str(e)}")
 
 class VideoRequest(BaseModel):
     video_path: str
