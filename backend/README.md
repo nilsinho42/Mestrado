@@ -1,126 +1,70 @@
-# Object Detection API
+# Video Processing API
 
-A RESTful API for object detection using machine learning models deployed across different cloud platforms.
+A lightweight Go API that serves as a proxy between the frontend and the Python ML service for video processing.
 
-## Features
+## Overview
 
-- User authentication and authorization
-- Location management
-- Image analysis with object detection
-- Model management and deployment
-- Cloud platform comparison
-- Performance metrics and monitoring
-- Rate limiting and security measures
+This API provides endpoints for:
+- Uploading videos for processing
+- Checking the status of video processing
+- Retrieving metrics from the ML service
 
-## Tech Stack
+## Architecture
 
-- Go 1.21+
-- PostgreSQL 14+
-- Gin web framework
-- JWT for authentication
-- Zap for logging
-
-## Project Structure
-
-```
-backend/
-├── controllers/     # Request handlers
-├── db/             # Database models and migrations
-├── middleware/     # Middleware components
-├── migrations/     # SQL migration files
-├── router/         # Route definitions
-└── main.go         # Application entry point
-```
-
-## Setup
-
-1. Install dependencies:
-   ```bash
-   go mod download
-   ```
-
-2. Set up environment variables:
-   ```bash
-   export DATABASE_URL="postgres://user:password@localhost:5432/dbname?sslmode=disable"
-   export JWT_SECRET="your-secret-key"
-   export AWS_MODEL_ENDPOINT="your-aws-endpoint"
-   export AZURE_MODEL_ENDPOINT="your-azure-endpoint"
-   export GCP_MODEL_ENDPOINT="your-gcp-endpoint"
-   ```
-
-3. Run migrations:
-   ```bash
-   go run main.go
-   ```
-
-4. Start the server:
-   ```bash
-   go run main.go
-   ```
+The backend service is designed with a simple architecture:
+- **controllers**: Handle HTTP requests and responses
+- **services**: Business logic for communicating with the ML service
+- **db**: Database models and migrations
+- **router**: Route definitions
 
 ## API Endpoints
 
-### Authentication
-- `POST /api/login` - User login
-- `POST /api/register` - User registration
+### Video Processing
+- `POST /api/videos/upload` - Upload a video for processing
+- `GET /api/videos/:id/status` - Get processing status for a video
 
-### Locations
-- `GET /api/locations` - List all locations
-- `POST /api/locations` - Create a new location
-- `GET /api/locations/:id` - Get a specific location
-- `PUT /api/locations/:id` - Update a location
-- `DELETE /api/locations/:id` - Delete a location
+### Metrics
+- `GET /api/metrics` - Get metrics for all providers
+- `GET /api/metrics/:source` - Get metrics for a specific provider (aws, azure, local)
 
-### Detections
-- `POST /api/detections/analyze` - Analyze an image
-- `GET /api/detections/stats` - Get detection statistics
+### Health Check
+- `GET /health` - Check if the service is running
 
-### Models
-- `GET /api/models` - List all models
-- `POST /api/models` - Register a new model
-- `GET /api/models/compare` - Compare model performance
-- `GET /api/models/:id/metrics` - Get model metrics
-- `PUT /api/models/:id` - Update a model
-- `POST /api/models/:id/deploy` - Deploy a model
+## Setup
 
-### Cloud
-- `GET /api/cloud/costs` - Get cloud costs
-- `GET /api/cloud/performance` - Get cloud performance metrics
+1. Set environment variables:
+```bash
+export DB_HOST=localhost
+export DB_USER=postgres
+export DB_PASSWORD=postgres
+export DB_NAME=ml_comparison
+export ML_SERVICE_URL=http://localhost:8000
+```
 
-## Rate Limiting
+2. Install dependencies:
+```bash
+go mod download
+```
 
-- Global rate limit: 100 requests per second
-- Detection endpoints: 10 requests per second
+3. Run the server:
+```bash
+go run main.go
+```
 
-## Security
+## Docker
 
-- JWT-based authentication
-- Password hashing with bcrypt
-- CORS enabled
-- Rate limiting
-- Input validation
+To build and run the service using Docker:
 
-## Database Schema
+```bash
+docker build -t video-processing-api .
+docker run -p 8080:8080 --env-file .env video-processing-api
+```
 
-The application uses PostgreSQL with the following main tables:
-- users
-- locations
-- images
-- detections
-- models
-- model_metrics
-- cloud_metrics
+## Communication with ML Service
 
-See `migrations/001_initial_schema.sql` for the complete schema.
+This backend communicates with the Python ML service to:
+1. Upload videos for processing
+2. Check processing status
+3. Retrieve metrics and results
 
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 
+The ML service performs the actual video processing using AWS, Azure, and local implementations. 

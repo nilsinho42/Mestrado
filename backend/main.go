@@ -14,7 +14,6 @@ import (
 	_ "github.com/lib/pq"
 	"go.uber.org/zap"
 
-	"github.com/nilsinho42/Mestrado/controllers"
 	"github.com/nilsinho42/Mestrado/db"
 	"github.com/nilsinho42/Mestrado/router"
 )
@@ -27,11 +26,17 @@ func main() {
 	}
 	defer logger.Sync()
 
-	// Initialize database
+	// Load environment variables
 	dbHost := os.Getenv("DB_HOST")
 	dbUser := os.Getenv("DB_USER")
 	dbPassword := os.Getenv("DB_PASSWORD")
 	dbName := os.Getenv("DB_NAME")
+	mlServiceURL := os.Getenv("ML_SERVICE_URL")
+
+	if mlServiceURL == "" {
+		mlServiceURL = "http://localhost:8000" // Default to local ML service
+		logger.Info("ML_SERVICE_URL not set, using default", zap.String("url", mlServiceURL))
+	}
 
 	logger.Info("Database connection parameters",
 		zap.String("host", dbHost),
@@ -39,6 +44,7 @@ func main() {
 		zap.String("dbname", dbName),
 	)
 
+	// Connect to database
 	connStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
 		dbUser, dbPassword, dbHost, dbName)
 
@@ -61,11 +67,8 @@ func main() {
 		logger.Fatal("Failed to run migrations", zap.Error(err))
 	}
 
-	// Initialize controllers with database connection
-	controllers.InitHandlers(dbConn, logger)
-
 	// Setup router
-	r := router.SetupRouter(dbConn)
+	r := router.SetupRouter(dbConn, logger, mlServiceURL)
 
 	// Start server
 	srv := &http.Server{

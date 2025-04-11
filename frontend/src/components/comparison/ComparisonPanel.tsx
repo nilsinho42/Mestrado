@@ -1,70 +1,61 @@
-import React, { useState, useRef } from 'react';
-import { Button, Card, Typography, Space, Alert } from 'antd';
-import { UploadOutlined, LineChartOutlined } from '@ant-design/icons';
+import React, { useState, useRef, useEffect } from 'react';
+import { Button, Card, Typography, Space, Alert, Table, Tabs, Spin, Progress, Statistic } from 'antd';
+import { UploadOutlined, LineChartOutlined, CheckCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { uploadVideo, getProcessingStatus } from '../../services/videoProcessing';
+import { ProcessingResult } from '../../types/video-processing';
 
-const { Title, Text } = Typography;
+const { Title, Text, Paragraph } = Typography;
+const { TabPane } = Tabs;
 
-interface Detection {
-  frame_number: number;
-  class: string;
-  confidence: number;
-  bbox: number[];
-  service: string;
-}
-
-interface ComparisonResult {
-  video_info: {
-    total_frames: number;
-    fps: number;
-    duration_seconds: number;
-    sampled_frames: number;
-    frame_indices: number[];
-  };
-  processing_time: {
-    yolo: number;
-    aws: number;
-    azure: number;
-  };
-  detections: {
-    yolo: Detection[];
-    aws: Detection[];
-    azure: Detection[];
-  };
-  total_detections: {
-    yolo: number;
-    aws: number;
-    azure: number;
-  };
-  frames: {
-    total: number;
-    sampled: number;
-    processed: {
-      yolo: number;
-      aws: number;
-      azure: number;
-    }
-  };
-  costs: {
-    yolo: number;
-    aws: number;
-    azure: number;
-  };
-  dashboard_url: string;
-  saved_frames: {
-    yolo: string[];
-    aws: string[];
-    azure: string[];
-  };
-}
+// Time interval for polling status updates (in ms)
+const POLLING_INTERVAL = 5000;
 
 const ComparisonPanel: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<ComparisonResult | null>(null);
+  const [processingId, setProcessingId] = useState<string | null>(null);
+  const [result, setResult] = useState<ProcessingResult | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const isFileSystemAccessSupported = 'showOpenFilePicker' in window;
+
+  // Start polling when we have a processing ID
+  useEffect(() => {
+    if (processingId && !result?.status?.includes('completed') && !result?.status?.includes('failed')) {
+      setIsPolling(true);
+      pollStatus();
+    } else {
+      setIsPolling(false);
+    }
+
+    return () => {
+      if (pollingTimerRef.current) {
+        clearTimeout(pollingTimerRef.current);
+      }
+    };
+  }, [processingId, result]);
+
+  const pollStatus = async () => {
+    if (!processingId) return;
+    
+    try {
+      const statusResult = await getProcessingStatus(processingId);
+      setResult(statusResult);
+      
+      // Continue polling if not complete
+      if (!statusResult.status?.includes('completed') && !statusResult.status?.includes('failed')) {
+        pollingTimerRef.current = setTimeout(pollStatus, POLLING_INTERVAL);
+      } else {
+        setIsPolling(false);
+      }
+    } catch (err) {
+      console.error('Error polling status:', err);
+      setIsPolling(false);
+    }
+  };
 
   const handleFileSelect = async () => {
     try {
@@ -102,44 +93,131 @@ const ComparisonPanel: React.FC = () => {
     }
   };
 
-  const startComparison = async () => {
+  const startProcessing = async () => {
     if (!selectedFile) return;
 
-    setIsProcessing(true);
+    setIsUploading(true);
     setError(null);
 
     try {
-      const formData = new FormData();
-      formData.append('video', selectedFile);
-
-      const response = await fetch('http://localhost:8000/start_comparison', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to start comparison');
-      }
-
-      const data = await response.json() as ComparisonResult;
-      setResult(data);
+      const uploadResult = await uploadVideo(selectedFile);
+      setProcessingId(uploadResult.processing_id);
+      setResult(uploadResult);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
       setError(errorMessage);
     } finally {
-      setIsProcessing(false);
+      setIsUploading(false);
     }
   };
 
-  const openDashboard = () => {
-    if (result?.dashboard_url) {
-      window.open(result.dashboard_url, '_blank', 'noopener,noreferrer');
+  const getStatusDisplay = () => {
+    if (!result) return null;
+    
+    if (result.status === 'processing') {
+      return (
+        <div style={{ textAlign: 'center', margin: '20px 0' }}>
+          <Spin size="large" />
+          <Paragraph style={{ marginTop: 16 }}>
+            Processing your video. This may take several minutes depending on the file size.
+          </Paragraph>
+          <Progress 
+            percent={30} 
+            status="active" 
+            strokeColor={{ from: '#108ee9', to: '#87d068' }}
+          />
+        </div>
+      );
+    } else if (result.status === 'completed') {
+      return (
+        <Alert
+          message="Processing Complete"
+          description="Your video has been successfully processed by all providers."
+          type="success"
+          showIcon
+          icon={<CheckCircleOutlined />}
+        />
+      );
+    } else if (result.status === 'failed') {
+      return (
+        <Alert
+          message="Processing Failed"
+          description={result.error || "An unknown error occurred during processing."}
+          type="error"
+          showIcon
+        />
+      );
     }
+    
+    return (
+      <Alert
+        message="Status"
+        description={`Current status: ${result.status}`}
+        type="info"
+        showIcon
+        icon={<ClockCircleOutlined />}
+      />
+    );
+  };
+
+  const renderResults = () => {
+    if (!result || !result.processing_time) return null;
+    
+    return (
+      <Tabs defaultActiveKey="summary">
+        <TabPane tab="Summary" key="summary">
+          <Card title="Processing Time (seconds)">
+            <Space size="large">
+              <Statistic title="YOLO (Local)" value={result.processing_time.yolo.toFixed(2)} suffix="s" />
+              <Statistic title="AWS Rekognition" value={result.processing_time.aws.toFixed(2)} suffix="s" />
+              <Statistic title="Azure AI Vision" value={result.processing_time.azure.toFixed(2)} suffix="s" />
+            </Space>
+          </Card>
+
+          {result.total_detections && (
+            <Card title="Objects Detected" style={{ marginTop: 16 }}>
+              <Space size="large">
+                <Statistic title="YOLO (Local)" value={result.total_detections.yolo} />
+                <Statistic title="AWS Rekognition" value={result.total_detections.aws} />
+                <Statistic title="Azure AI Vision" value={result.total_detections.azure} />
+              </Space>
+            </Card>
+          )}
+
+          {result.costs && (
+            <Card title="Estimated Cost (USD)" style={{ marginTop: 16 }}>
+              <Space size="large">
+                <Statistic title="YOLO (Local)" value={result.costs.yolo.toFixed(4)} prefix="$" />
+                <Statistic title="AWS Rekognition" value={result.costs.aws.toFixed(4)} prefix="$" />
+                <Statistic title="Azure AI Vision" value={result.costs.azure.toFixed(4)} prefix="$" />
+              </Space>
+            </Card>
+          )}
+        </TabPane>
+
+        <TabPane tab="Video Info" key="video">
+          {result.video_info && (
+            <Card>
+              <Paragraph><strong>Total Frames:</strong> {result.video_info.total_frames}</Paragraph>
+              <Paragraph><strong>FPS:</strong> {result.video_info.fps}</Paragraph>
+              <Paragraph><strong>Duration:</strong> {result.video_info.duration_seconds.toFixed(2)} seconds</Paragraph>
+              <Paragraph><strong>Sampled Frames:</strong> {result.video_info.sampled_frames}</Paragraph>
+            </Card>
+          )}
+        </TabPane>
+
+        <TabPane tab="Detailed Comparison" key="details">
+          <Paragraph>
+            This tab would display detailed comparison results, detection accuracy metrics, 
+            and performance analysis between the three detection providers.
+          </Paragraph>
+        </TabPane>
+      </Tabs>
+    );
   };
 
   return (
-    <Card title="Service Comparison" style={{ maxWidth: 800, margin: '0 auto' }}>
+    <Card title="Cloud Provider Comparison" style={{ maxWidth: 900, margin: '20px auto' }}>
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         {/* Hidden file input for fallback */}
         <input
@@ -157,7 +235,7 @@ const ComparisonPanel: React.FC = () => {
             <Button 
               icon={<UploadOutlined />} 
               onClick={handleFileSelect}
-              disabled={isProcessing}
+              disabled={isUploading || isPolling}
             >
               Select Video
             </Button>
@@ -165,84 +243,42 @@ const ComparisonPanel: React.FC = () => {
           </Space>
         </div>
 
-        {/* Start Comparison */}
+        {/* Start Processing */}
         <div>
-          <Title level={4}>2. Start Comparison</Title>
+          <Title level={4}>2. Process Video</Title>
           <Button 
             type="primary"
-            onClick={startComparison}
-            disabled={!selectedFile || isProcessing}
-            loading={isProcessing}
+            onClick={startProcessing}
+            disabled={!selectedFile || isUploading || isPolling}
+            loading={isUploading}
           >
-            Start Comparison
+            {isUploading ? 'Uploading...' : 'Start Processing'}
           </Button>
+          <Paragraph type="secondary" style={{ marginTop: 8 }}>
+            Video will be processed by AWS Rekognition, Azure AI Vision, and local YOLO model
+          </Paragraph>
         </div>
 
-        {/* Error Display */}
-        {error && (
-          <Alert
-            message="Error"
-            description={error}
-            type="error"
-            showIcon
-          />
+        {/* Status Display */}
+        {(processingId || error) && (
+          <div>
+            <Title level={4}>3. Processing Status</Title>
+            {error ? (
+              <Alert
+                message="Error"
+                description={error}
+                type="error"
+                showIcon
+              />
+            ) : getStatusDisplay()}
+          </div>
         )}
 
         {/* Results Display */}
-        {result && (
+        {result && result.status === 'completed' && (
           <div>
-            <Title level={4}>3. Results</Title>
-            <Space direction="vertical">
-              <Card size="small" title="Video Information">
-                <Text>Total Frames: {result.video_info.total_frames}</Text>
-                <br />
-                <Text>FPS: {result.video_info.fps}</Text>
-                <br />
-                <Text>Duration: {result.video_info.duration_seconds.toFixed(2)} seconds</Text>
-                <br />
-                <Text>Sampled Frames: {result.video_info.sampled_frames}</Text>
-              </Card>
-
-              <Card size="small" title="Frames Processed">
-                <Text>YOLO: {result.frames.processed.yolo} / {result.frames.sampled}</Text>
-                <br />
-                <Text>AWS: {result.frames.processed.aws} / {result.frames.sampled}</Text>
-                <br />
-                <Text>Azure: {result.frames.processed.azure} / {result.frames.sampled}</Text>
-              </Card>
-
-              <Card size="small" title="Processing Time (seconds)">
-                <Text>YOLO: {result.processing_time.yolo.toFixed(3)}</Text>
-                <br />
-                <Text>AWS: {result.processing_time.aws.toFixed(3)}</Text>
-                <br />
-                <Text>Azure: {result.processing_time.azure.toFixed(3)}</Text>
-              </Card>
-
-              <Card size="small" title="Total Detections">
-                <Text>YOLO: {result.total_detections.yolo}</Text>
-                <br />
-                <Text>AWS: {result.total_detections.aws}</Text>
-                <br />
-                <Text>Azure: {result.total_detections.azure}</Text>
-              </Card>
-
-              <Card size="small" title="Estimated Cost (USD)">
-                <Text>YOLO: ${result.costs.yolo.toFixed(6)}</Text>
-                <br />
-                <Text>AWS: ${result.costs.aws.toFixed(6)}</Text>
-                <br />
-                <Text>Azure: ${result.costs.azure.toFixed(6)}</Text>
-              </Card>
-
-              <Button 
-                type="primary" 
-                icon={<LineChartOutlined />}
-                onClick={openDashboard}
-              >
-                Open Detailed Dashboard
-              </Button>
-            </Space>
+            <Title level={4}>4. Results</Title>
+            {renderResults()}
           </div>
         )}
       </Space>

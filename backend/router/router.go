@@ -2,93 +2,50 @@ package router
 
 import (
 	"database/sql"
-	"os"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
 	"github.com/nilsinho42/Mestrado/controllers"
-	"github.com/nilsinho42/Mestrado/middleware"
 	"github.com/nilsinho42/Mestrado/services"
 )
 
-func SetupRouter(db *sql.DB) *gin.Engine {
+func SetupRouter(db *sql.DB, logger *zap.Logger, mlServiceURL string) *gin.Engine {
 	router := gin.Default()
 
-	// Configure CORS
+	// Configure CORS to allow requests from frontend
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:3000"},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowMethods:     []string{"GET", "POST", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Content-Length"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 		MaxAge:           12 * 60 * 60, // 12 hours
 	}))
 
-	// Configure rate limits for specific endpoints
-	rateLimits := map[string]int{
-		"/api/ml/videos/process":    10, // 10 requests per minute
-		"/api/ml/videos/:id/status": 60, // 60 requests per minute
-		"/api/ml/detections/stats":  30, // 30 requests per minute
-		"/api/auth/logout":          30, // 30 requests per minute
-	}
-
-	// Initialize rate limiter
-	rateLimiter := middleware.NewEndpointRateLimiter(rateLimits)
-
 	// Initialize ML service
 	mlService := services.NewMLService(services.MLServiceConfig{
-		BaseURL:     os.Getenv("ML_SERVICE_URL"),
-		JWTSecret:   os.Getenv("ML_SERVICE_JWT_SECRET"),
-		ServiceName: "golang_backend",
+		BaseURL: mlServiceURL,
+		DB:      db,
 	})
 
 	// Initialize controllers
-	mlController := controllers.NewMLController(mlService)
-	modelController := controllers.NewModelController(db)
-	cloudController := controllers.NewCloudController(db)
+	mlController := controllers.NewMLController(mlService, logger)
 
-	// Health check endpoint (must be first)
-	router.GET("/health", controllers.HandleHealth)
+	// Health check endpoint
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
 
-	// Public auth endpoints
-	auth := router.Group("/api")
+	// Video processing API endpoints
+	api := router.Group("/api")
 	{
-		auth.POST("/login", controllers.HandleLogin)
-		auth.POST("/register", controllers.HandleRegister)
-	}
-
-	// Protected routes
-	protected := router.Group("/api")
-	protected.Use(middleware.AuthMiddleware())
-	protected.Use(rateLimiter.RateLimit())
-	{
-		// ML routes
-		ml := protected.Group("/ml")
-		{
-			ml.POST("/videos/process", mlController.ProcessVideo)
-			ml.GET("/videos/:id/status", mlController.GetVideoStatus)
-			ml.GET("/detections/stats", mlController.GetDetectionStats)
-		}
-
-		// Model routes
-		models := protected.Group("/models")
-		{
-			models.POST("/register", modelController.RegisterModel)
-			models.POST("/:id/deploy", modelController.DeployModel)
-			models.GET("/list", modelController.ListModels)
-			models.GET("/:id/metrics", modelController.GetModelMetrics)
-			models.GET("/compare", modelController.CompareModels)
-		}
-
-		// Cloud routes
-		cloud := protected.Group("/cloud")
-		{
-			cloud.GET("/costs", cloudController.GetCloudCosts)
-			cloud.GET("/performance", cloudController.GetCloudPerformance)
-		}
-
-		// Auth routes
-		protected.POST("/auth/logout", controllers.HandleLogout)
+		// Video processing routes
+		api.POST("/videos/upload", mlController.UploadVideo)
+		api.GET("/videos/:id/status", mlController.GetVideoStatus)
+		api.GET("/metrics", mlController.GetMetrics)
+		api.GET("/metrics/:source", mlController.GetMetricsBySource)
 	}
 
 	return router
