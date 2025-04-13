@@ -287,22 +287,26 @@ class CostCalculator:
         # Image analysis cost (Task A)
         num_images = metrics.get('task_a_metrics', {}).get('aws', {}).get('images_processed', 0)
         if num_images > 0:
-            costs["image_analysis"] = num_images * aws_costs['rekognition_image_analysis']
+            costs["image_analysis"] = num_images * aws_costs.get('rekognition_image_analysis', 
+                                                                 aws_costs.get('rekognition_image_analysis_per_image', 0.001))
         
         # Video analysis cost (Task B)
         video_count = metrics.get('task_b_metrics', {}).get('aws', {}).get('videos_processed', 0)
         video_duration_minutes = metrics.get('task_b_metrics', {}).get('aws', {}).get('total_duration_minutes', 0)
         
         if video_count > 0 and video_duration_minutes > 0:
-            costs["video_analysis"] = video_duration_minutes * aws_costs['rekognition_video_analysis']
+            costs["video_analysis"] = video_duration_minutes * aws_costs.get('rekognition_video_analysis',
+                                                                           aws_costs.get('rekognition_video_analysis_per_minute', 0.10))
         
         # Compute cost (Fargate)
         vcpu_hours = metrics.get('task_b_metrics', {}).get('aws', {}).get('vcpu_hours', 0)
         memory_gb_hours = metrics.get('task_b_metrics', {}).get('aws', {}).get('memory_gb_hours', 0)
         
         if vcpu_hours > 0 or memory_gb_hours > 0:
-            vcpu_cost = vcpu_hours * aws_costs['fargate_vcpu_hour']
-            memory_cost = memory_gb_hours * aws_costs['fargate_memory_gb_hour']
+            vcpu_cost = vcpu_hours * aws_costs.get('fargate_vcpu_hour', 
+                                                  aws_costs.get('fargate_per_vcpu_hour', 0.04048))
+            memory_cost = memory_gb_hours * aws_costs.get('fargate_memory_gb_hour',
+                                                         aws_costs.get('fargate_per_gb_memory_hour', 0.004445))
             costs["compute"] = vcpu_cost + memory_cost
         
         # Storage cost (S3)
@@ -310,9 +314,38 @@ class CostCalculator:
         get_requests = metrics.get('task_b_metrics', {}).get('aws', {}).get('get_requests', 0)
         put_requests = metrics.get('task_b_metrics', {}).get('aws', {}).get('put_requests', 0)
         
-        storage_cost = (storage_gb * aws_costs['s3_storage_gb_month'] / 30)  # Daily cost
-        request_cost = (get_requests / 1000 * aws_costs['s3_get_request'] + 
-                        put_requests / 1000 * aws_costs['s3_put_request'])
+        # Check for different possible key names for storage costs
+        s3_storage_cost_key = None
+        if 's3_storage_gb_month' in aws_costs:
+            s3_storage_cost_key = 's3_storage_gb_month'
+        elif 's3_storage_per_gb_per_month' in aws_costs:
+            s3_storage_cost_key = 's3_storage_per_gb_per_month'
+        else:
+            # Default value if neither key exists
+            s3_storage_cost_key = 's3_storage_gb_month'
+            aws_costs[s3_storage_cost_key] = 0.023
+        
+        s3_get_cost_key = None
+        if 's3_get_request' in aws_costs:
+            s3_get_cost_key = 's3_get_request'
+        elif 's3_get_request_per_1000' in aws_costs:
+            s3_get_cost_key = 's3_get_request_per_1000'
+        else:
+            s3_get_cost_key = 's3_get_request'
+            aws_costs[s3_get_cost_key] = 0.0004
+            
+        s3_put_cost_key = None
+        if 's3_put_request' in aws_costs:
+            s3_put_cost_key = 's3_put_request'
+        elif 's3_put_request_per_1000' in aws_costs:
+            s3_put_cost_key = 's3_put_request_per_1000'
+        else:
+            s3_put_cost_key = 's3_put_request'
+            aws_costs[s3_put_cost_key] = 0.005
+        
+        storage_cost = (storage_gb * aws_costs[s3_storage_cost_key] / 30)  # Daily cost
+        request_cost = (get_requests / 1000 * aws_costs[s3_get_cost_key] + 
+                        put_requests / 1000 * aws_costs[s3_put_cost_key])
         
         costs["storage"] = storage_cost + request_cost
         
@@ -345,21 +378,75 @@ class CostCalculator:
         # Image analysis cost (Task A)
         num_images = metrics.get('task_a_metrics', {}).get('azure', {}).get('images_processed', 0)
         if num_images > 0:
-            costs["image_analysis"] = num_images * azure_costs['vision_image_analysis']
+            # Try different possible key names
+            image_analysis_cost_key = None
+            if 'vision_image_analysis' in azure_costs:
+                image_analysis_cost_key = 'vision_image_analysis'
+            elif 'computer_vision_per_1000_images' in azure_costs:
+                image_analysis_cost_key = 'computer_vision_per_1000_images'
+                # This is per 1000 images, so we need to adjust
+                costs["image_analysis"] = num_images * (azure_costs[image_analysis_cost_key] / 1000)
+                image_analysis_cost_key = None  # Skip the default calculation below
+            else:
+                # Default value if neither key exists
+                image_analysis_cost_key = 'vision_image_analysis'
+                azure_costs[image_analysis_cost_key] = 0.001
+                
+            if image_analysis_cost_key:
+                costs["image_analysis"] = num_images * azure_costs[image_analysis_cost_key]
         
         # Video analysis cost (Task B)
         video_duration_minutes = metrics.get('task_b_metrics', {}).get('azure', {}).get('total_duration_minutes', 0)
         
         if video_duration_minutes > 0:
-            costs["video_analysis"] = video_duration_minutes * azure_costs['vision_video_analysis']
+            # Try different possible key names
+            video_analysis_cost_key = None
+            if 'vision_video_analysis' in azure_costs:
+                video_analysis_cost_key = 'vision_video_analysis'
+            elif 'computer_vision_transaction_per_1000' in azure_costs:
+                # This is an approximation, adjust as needed
+                video_analysis_cost_key = 'computer_vision_transaction_per_1000'
+                # Assuming 1 transaction per second of video
+                transactions = video_duration_minutes * 60
+                costs["video_analysis"] = transactions * (azure_costs[video_analysis_cost_key] / 1000)
+                video_analysis_cost_key = None  # Skip the default calculation below
+            else:
+                # Default value if neither key exists
+                video_analysis_cost_key = 'vision_video_analysis'
+                azure_costs[video_analysis_cost_key] = 0.15
+                
+            if video_analysis_cost_key:
+                costs["video_analysis"] = video_duration_minutes * azure_costs[video_analysis_cost_key]
         
         # Compute cost (Container Apps)
         vcpu_hours = metrics.get('task_b_metrics', {}).get('azure', {}).get('vcpu_hours', 0)
         memory_gb_hours = metrics.get('task_b_metrics', {}).get('azure', {}).get('memory_gb_hours', 0)
         
         if vcpu_hours > 0 or memory_gb_hours > 0:
-            vcpu_cost = vcpu_hours * azure_costs['container_apps_vcpu_hour']
-            memory_cost = memory_gb_hours * azure_costs['container_apps_memory_gb_hour']
+            # Try different possible key names for vCPU cost
+            vcpu_cost_key = None
+            if 'container_apps_vcpu_hour' in azure_costs:
+                vcpu_cost_key = 'container_apps_vcpu_hour'
+            elif 'container_app_per_vcpu_hour' in azure_costs:
+                vcpu_cost_key = 'container_app_per_vcpu_hour'
+            else:
+                # Default value if neither key exists
+                vcpu_cost_key = 'container_apps_vcpu_hour'
+                azure_costs[vcpu_cost_key] = 0.036
+            
+            # Try different possible key names for memory cost
+            memory_cost_key = None
+            if 'container_apps_memory_gb_hour' in azure_costs:
+                memory_cost_key = 'container_apps_memory_gb_hour'
+            elif 'container_app_per_gb_memory_hour' in azure_costs:
+                memory_cost_key = 'container_app_per_gb_memory_hour'
+            else:
+                # Default value if neither key exists
+                memory_cost_key = 'container_apps_memory_gb_hour'
+                azure_costs[memory_cost_key] = 0.004
+                
+            vcpu_cost = vcpu_hours * azure_costs[vcpu_cost_key]
+            memory_cost = memory_gb_hours * azure_costs[memory_cost_key]
             costs["compute"] = vcpu_cost + memory_cost
         
         # Storage cost (Blob Storage)
@@ -367,9 +454,48 @@ class CostCalculator:
         get_requests = metrics.get('task_b_metrics', {}).get('azure', {}).get('get_requests', 0)
         put_requests = metrics.get('task_b_metrics', {}).get('azure', {}).get('put_requests', 0)
         
-        storage_cost = (storage_gb * azure_costs['blob_storage_gb_month'] / 30)  # Daily cost
-        request_cost = (get_requests / 10000 * azure_costs['blob_get_request'] + 
-                        put_requests / 10000 * azure_costs['blob_put_request'])
+        # Try different possible key names for storage costs
+        blob_storage_cost_key = None
+        if 'blob_storage_gb_month' in azure_costs:
+            blob_storage_cost_key = 'blob_storage_gb_month'
+        elif 'blob_storage_per_gb_per_month' in azure_costs:
+            blob_storage_cost_key = 'blob_storage_per_gb_per_month'
+        else:
+            # Default value if neither key exists
+            blob_storage_cost_key = 'blob_storage_gb_month'
+            azure_costs[blob_storage_cost_key] = 0.0208
+        
+        # Try different possible key names for get request costs
+        blob_get_cost_key = None
+        if 'blob_get_request' in azure_costs:
+            blob_get_cost_key = 'blob_get_request'
+        elif 'blob_read_operations_per_10000' in azure_costs:
+            blob_get_cost_key = 'blob_read_operations_per_10000'
+        else:
+            # Default value if neither key exists
+            blob_get_cost_key = 'blob_get_request'
+            azure_costs[blob_get_cost_key] = 0.0004
+        
+        # Try different possible key names for put request costs
+        blob_put_cost_key = None
+        if 'blob_put_request' in azure_costs:
+            blob_put_cost_key = 'blob_put_request'
+        elif 'blob_write_operations_per_10000' in azure_costs:
+            blob_put_cost_key = 'blob_write_operations_per_10000'
+        else:
+            # Default value if neither key exists
+            blob_put_cost_key = 'blob_put_request'
+            azure_costs[blob_put_cost_key] = 0.0054
+        
+        # Calculate storage costs
+        storage_cost = (storage_gb * azure_costs[blob_storage_cost_key] / 30)  # Daily cost
+        
+        # Determine the divisor for requests (Azure uses per 10,000 or per 1,000)
+        get_request_divisor = 10000 if 'per_10000' in blob_get_cost_key else 1000
+        put_request_divisor = 10000 if 'per_10000' in blob_put_cost_key else 1000
+        
+        request_cost = (get_requests / get_request_divisor * azure_costs[blob_get_cost_key] + 
+                        put_requests / put_request_divisor * azure_costs[blob_put_cost_key])
         
         costs["storage"] = storage_cost + request_cost
         

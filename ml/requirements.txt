@@ -1,0 +1,26 @@
+# Core dependencies
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+pydantic==2.4.2
+python-dotenv==1.0.0
+requests==2.31.0
+psycopg2-binary==2.9.9
+
+# Image processing
+Pillow==10.1.0
+numpy==1.26.2
+opencv-python-headless==4.8.1.78
+
+# ML dependencies
+torch==2.1.1
+torchvision==0.16.1
+ultralytics==8.0.221
+
+# AWS dependencies
+boto3==1.29.0
+
+# Azure dependencies 
+azure-storage-blob==12.19.0
+azure-cognitiveservices-vision-computervision==0.9.0
+azure-identity==1.14.1 

@@ -38,42 +38,57 @@ func main() {
 		logger.Info("ML_SERVICE_URL not set, using default", zap.String("url", mlServiceURL))
 	}
 
-	logger.Info("Database connection parameters",
-		zap.String("host", dbHost),
-		zap.String("user", dbUser),
-		zap.String("dbname", dbName),
-	)
+	// Database connection
+	var dbConn *sql.DB
 
-	// Connect to database
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
-		dbUser, dbPassword, dbHost, dbName)
+	if dbHost != "" && dbUser != "" && dbPassword != "" && dbName != "" {
+		logger.Info("Database connection parameters",
+			zap.String("host", dbHost),
+			zap.String("user", dbUser),
+			zap.String("dbname", dbName),
+		)
 
-	logger.Info("Attempting to connect to database", zap.String("connStr", connStr))
+		// Connect to database
+		connStr := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable",
+			dbUser, dbPassword, dbHost, dbName)
 
-	dbConn, err := sql.Open("postgres", connStr)
-	if err != nil {
-		logger.Fatal("Failed to connect to database", zap.Error(err))
-	}
-	defer dbConn.Close()
+		logger.Info("Attempting to connect to database", zap.String("connStr", connStr))
 
-	// Test database connection
-	if err := dbConn.Ping(); err != nil {
-		logger.Fatal("Failed to ping database", zap.Error(err))
-	}
-	logger.Info("Successfully connected to database")
+		var err error
+		dbConn, err = sql.Open("postgres", connStr)
+		if err != nil {
+			logger.Warn("Failed to connect to database, continuing without DB", zap.Error(err))
+		} else {
+			defer dbConn.Close()
 
-	// Run migrations
-	if err := db.RunMigrations(dbConn); err != nil {
-		logger.Fatal("Failed to run migrations", zap.Error(err))
+			// Test database connection
+			if err := dbConn.Ping(); err != nil {
+				logger.Warn("Failed to ping database, continuing without DB", zap.Error(err))
+				dbConn = nil
+			} else {
+				logger.Info("Successfully connected to database")
+
+				// Run migrations
+				if err := db.RunMigrations(dbConn); err != nil {
+					logger.Warn("Failed to run migrations, continuing without DB", zap.Error(err))
+					dbConn = nil
+				}
+			}
+		}
+	} else {
+		logger.Warn("Database configuration not set, continuing without DB")
 	}
 
 	// Setup router
 	r := router.SetupRouter(dbConn, logger, mlServiceURL)
 
-	// Start server
+	// Start server with extended timeouts for large file uploads
 	srv := &http.Server{
-		Addr:    ":8080",
-		Handler: r,
+		Addr:         ":8080",
+		Handler:      r,
+		ReadTimeout:  5 * time.Minute, // Increased from default 60s
+		WriteTimeout: 5 * time.Minute, // Increased from default 60s
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Graceful shutdown

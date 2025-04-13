@@ -6,6 +6,7 @@ import sys
 import time
 import os
 import uvicorn
+import traceback
 from pathlib import Path
 
 def run_servers():
@@ -26,6 +27,8 @@ def run_servers():
         sys.exit(0)
     except Exception as e:
         print(f"Error starting server: {e}")
+        print("Detailed error:")
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

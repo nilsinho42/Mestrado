@@ -238,9 +238,130 @@ class IoUTracker(BaseTracker):
         
         # Return only active tracks (those updated in current frame)
         return self.get_active_tracks()
+    
+    def process_video(self, video_path: str) -> Dict[str, Any]:
+        """
+        Process a video file for object tracking.
+        
+        Args:
+            video_path: Path to the video file
+            
+        Returns:
+            Dictionary with tracking results
+        """
+        import cv2
+        import time
+        import numpy as np
+        from pathlib import Path
+        
+        # Reset tracker state for new video
+        self.reset()
+        
+        # Start timing
+        start_time = time.time()
+        
+        # Open the video
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.error(f"Could not open video file: {video_path}")
+            return {"error": "Could not open video file"}
+        
+        # Get video properties
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Initialize results
+        all_tracks = []
+        frame_results = []
+        
+        # Find detector in global scope or context
+        # This is a workaround - ideally the detector should be passed as an argument
+        detector = None
+        from main import get_detector_for_provider
+        try:
+            detector = get_detector_for_provider(self.name.split('_')[0])
+        except Exception as e:
+            logger.error(f"Could not get detector for provider {self.name}: {e}")
+            # Fallback to a simple per-frame processing approach without detection
+            
+        # Process frames
+        frame_idx = 0
+        
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Process frame with detector if available
+                if detector:
+                    detections_dict = detector.detect(frame)
+                    # Convert detection dictionaries to Detection objects
+                    detections = []
+                    for det in detections_dict:
+                        detections.append(Detection(
+                            frame_number=frame_idx,
+                            class_name=det.get("detection_type", det.get("class_name", "unknown")),
+                            confidence=det.get("confidence", 0.0),
+                            bbox=det.get("bbox", [0, 0, 0, 0]),
+                            service=self.name.split('_')[0],
+                            class_id=det.get("class_id"),
+                            metadata=det.get("metadata", {})
+                        ))
+                else:
+                    # Skip detection if no detector available
+                    detections = []
+                
+                # Update tracker with new detections
+                active_tracks = self.update(detections)
+                
+                # Store tracks for this frame
+                frame_result = {
+                    "frame_number": frame_idx,
+                    "detections": [d.__dict__ for d in detections],
+                    "active_tracks": [t.to_dict() for t in active_tracks],
+                }
+                frame_results.append(frame_result)
+                
+                # Add unique tracks to overall results
+                for track in active_tracks:
+                    if track.id not in [t.id for t in all_tracks]:
+                        all_tracks.append(track)
+                
+                frame_idx += 1
+                
+        finally:
+            cap.release()
+        
+        # Calculate processing time
+        processing_time = time.time() - start_time
+        
+        # Count objects by class
+        class_counts = self.count_by_class()
+        
+        # Build final results
+        results = {
+            "video_path": video_path,
+            "video_name": Path(video_path).stem,
+            "processing_time": processing_time,
+            "frames_processed": frame_idx,
+            "unique_tracks": len(all_tracks),
+            "class_counts": class_counts,
+            "frame_results": frame_results,
+            "tracks": [t.to_dict() for t in self.get_unique_objects()],
+            "summary": {
+                "people_count": class_counts.get("person", 0),
+                "vehicle_count": sum([class_counts.get(c, 0) for c in ["car", "truck", "bus", "motorcycle"]]),
+                "processing_time": processing_time,
+                "cost": 0.0  # Local processing has no cloud cost
+            }
+        }
+        
+        return results
 
 
-# Placeholder for DeepSORT integration - will be implemented later
 class DeepSORTTracker(BaseTracker):
     """
     DeepSORT tracker integration.
@@ -264,6 +385,20 @@ class DeepSORTTracker(BaseTracker):
         """
         # This will be replaced with actual DeepSORT implementation
         return self.iou_tracker.update(detections)
+    
+    def process_video(self, video_path: str) -> Dict[str, Any]:
+        """
+        Process a video file for object tracking.
+        Currently falls back to IoU tracker.
+        
+        Args:
+            video_path: Path to the video file
+            
+        Returns:
+            Dictionary with tracking results
+        """
+        # Use the IoU tracker's process_video method as a fallback
+        return self.iou_tracker.process_video(video_path)
 
 
 # Factory function to create the appropriate tracker based on provider

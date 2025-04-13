@@ -35,11 +35,9 @@ RUN apk add --no-cache bash
 
 # Create entrypoint script
 RUN printf '#!/bin/bash\n\
-echo "Updating hosts file..."\n\
-DOCKER_INTERNAL_IP=$(getent hosts host.docker.internal | cut -d" " -f1)\n\
-if [ -z "$DOCKER_INTERNAL_IP" ]; then\n\
-    echo "172.17.0.1 host.docker.internal" >> /etc/hosts\n\
-fi\n\
+echo "Adding host.docker.internal to hosts file..."\n\
+# Simplified approach without relying on getent\n\
+echo "172.17.0.1 host.docker.internal" >> /etc/hosts\n\
 echo "Starting nginx..."\n\
 exec nginx -g "daemon off;"\n' > /entrypoint.sh
 

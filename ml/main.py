@@ -32,6 +32,42 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global dictionary to store detectors by provider
+_detectors = {}
+
+def get_detector_for_provider(provider: str):
+    """
+    Get a detector for a specific provider from the global _detectors dictionary.
+    
+    Args:
+        provider: Provider name (e.g., 'local', 'aws', 'azure')
+        
+    Returns:
+        Detector instance or None if not found
+    """
+    # Convert provider name to standard form for lookup
+    if provider.lower() in ['local', 'yolo']:
+        lookup_key = 'local'
+    elif provider.lower() in ['aws', 'rekognition']:
+        lookup_key = 'aws'
+    elif provider.lower() in ['azure', 'vision']:
+        lookup_key = 'azure'
+    else:
+        lookup_key = provider.lower()
+    
+    # Return from global dict if available
+    if lookup_key in _detectors:
+        return _detectors[lookup_key]
+    
+    # Try to create a new detector if not found
+    try:
+        detector = create_detector(provider=lookup_key)
+        _detectors[lookup_key] = detector
+        return detector
+    except Exception as e:
+        logger.error(f"Failed to create detector for provider {provider}: {e}")
+        return None
+
 def setup_directories():
     """Set up the required directories."""
     directories = [
@@ -85,6 +121,8 @@ class VideoPipeline:
     
     def _initialize_detectors(self):
         """Initialize detectors for each provider."""
+        global _detectors
+        
         # YOLO detector for local processing
         yolo_detector = create_detector(
             provider="yolo",
@@ -92,14 +130,17 @@ class VideoPipeline:
             confidence_threshold=0.25
         )
         self.image_processor.register_detector("local", yolo_detector)
+        _detectors["local"] = yolo_detector  # Add to global dict
         
         # AWS Rekognition detector
         aws_detector = create_detector(provider="aws")
         self.image_processor.register_detector("aws", aws_detector)
+        _detectors["aws"] = aws_detector  # Add to global dict
         
         # Azure Vision detector
         azure_detector = create_detector(provider="azure")
         self.image_processor.register_detector("azure", azure_detector)
+        _detectors["azure"] = azure_detector  # Add to global dict
         
         logger.info("Detectors initialized")
     

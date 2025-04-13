@@ -5,16 +5,37 @@ import { ProcessingResult, MetricsResponse } from '../types/video-processing';
  * Uploads a video file and starts processing
  */
 export const uploadVideo = async (file: File): Promise<ProcessingResult> => {
+  console.log('Starting video upload:', file.name, 'Size:', file.size);
+  
+  // Create a simple FormData with just the video file
   const formData = new FormData();
   formData.append('video', file);
   
-  const response = await api.post('/api/videos/upload', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
+  console.log('FormData created, sending request to:', '/api/videos/upload');
   
-  return response.data;
+  try {
+    // Use more robust configuration for large file uploads
+    const response = await api.post('/api/videos/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      // Add timeout to prevent hanging indefinitely
+      timeout: 300000, // 5 minutes
+      // Disable default transformRequest to ensure FormData is sent correctly
+      transformRequest: [(data) => data],
+    });
+    
+    console.log('Upload response received:', response.data);
+    return response.data;
+  } catch (error: any) {
+    console.error('Upload error:', error.message);
+    if (error.response) {
+      console.error('Error response:', error.response.status, error.response.data);
+    } else if (error.request) {
+      console.error('No response received, request:', error.request);
+    }
+    throw error;
+  }
 };
 
 /**

@@ -12,6 +12,7 @@ import cv2
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Union
 from abc import ABC, abstractmethod
+from io import BytesIO
 
 # Import from our core package
 from .tracking import Detection
@@ -387,8 +388,11 @@ class AzureVisionDetector(ObjectDetector):
             # Convert image to bytes
             _, img_bytes = cv2.imencode('.jpg', image)
             
+            # Create a BytesIO object that has a read method
+            image_stream = BytesIO(img_bytes.tobytes())
+            
             # Call Azure API
-            response = self.vision_client.detect_objects_in_stream(img_bytes.tobytes())
+            response = self.vision_client.detect_objects_in_stream(image_stream)
             
             # Extract detections
             detections = []
