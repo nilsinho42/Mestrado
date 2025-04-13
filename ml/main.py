@@ -23,7 +23,7 @@ from core import (
     VideoProcessor, ImageAnalysisProcessor, VideoTrackingProcessor,
     create_detector, create_tracker, create_storage_provider, create_cost_calculator
 )
-from ml.core.db_utils import Database
+from core.db_utils import Database
 
 # Configure logging
 logging.basicConfig(
@@ -122,14 +122,34 @@ class VideoPipeline:
     def _initialize_storage(self):
         """Initialize cloud storage providers."""
         # AWS S3 storage
-        aws_storage = create_storage_provider(provider="aws")
-        self.tracking_processor.register_storage_provider("aws", aws_storage)
+        try:
+            aws_storage = create_storage_provider(provider="aws")
+            self.tracking_processor.register_storage_provider("aws", aws_storage)
+            logger.info("AWS S3 storage provider initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize AWS S3 storage: {str(e)}")
         
         # Azure Blob storage
-        azure_storage = create_storage_provider(provider="azure")
-        self.tracking_processor.register_storage_provider("azure", azure_storage)
+        try:
+            # Get Azure connection details from environment variables
+#            azure_connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+#            azure_container_name = os.getenv("AZURE_CONTAINER_NAME")
+#            azure_account_name = os.getenv("AZURE_STORAGE_ACCOUNT")
+#            azure_account_key = os.getenv("AZURE_STORAGE_KEY")
+            # Create storage provider with explicit parameters
+            azure_storage = create_storage_provider(
+                provider="azure",
+#                connection_string=azure_connection_string,
+#                container_name=azure_container_name,
+#                account_name=azure_account_name,
+#                account_key=azure_account_key
+            )
+            self.tracking_processor.register_storage_provider("azure", azure_storage)
+            logger.info("Azure Blob storage provider initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Azure Blob storage: {str(e)}")
         
-        logger.info("Storage providers initialized")
+        logger.info("Storage providers initialization completed")
     
     def process_video(self, video_path: str) -> Dict[str, Any]:
         """Process video through the pipeline.

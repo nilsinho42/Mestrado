@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/nilsinho42/Mestrado/backend/db/models"
+	"github.com/nilsinho42/Mestrado/db/models"
 )
 
 // MLOperations handles database operations for ML-related data

@@ -191,28 +191,27 @@ class YOLODetector(ObjectDetector):
     def _load_model(self) -> Any:
         """Load the YOLO model."""
         try:
-            if self.model_path and os.path.exists(self.model_path):
-                # Load custom model
-                model = torch.hub.load('ultralytics/yolov5', 'custom', 
-                                      path=self.model_path, device=self.device)
-            else:
-                # Load standard YOLOv5s model
-                logger.warning(f"Model path {self.model_path} not found, loading default YOLOv5s")
-                model = torch.hub.load('ultralytics/yolov5', 'yolov5s', 
-                                      pretrained=True, device=self.device)
+            # Try to load locally without using torch.hub
+            from ultralytics import YOLO
             
-            # Configure model
-            model.conf = self.confidence_threshold  # Set confidence threshold
-            model.eval()  # Set to evaluation mode
+            if self.model_path and os.path.exists(self.model_path):
+                # Load from file path
+                model = YOLO(self.model_path)
+                logger.info(f"Loaded YOLO model from {self.model_path}")
+            else:
+                # If no model path, default to YOLOv8n
+                model = YOLO("yolov8n.pt")
+                logger.info("Loaded default YOLOv8n model")
+            
             return model
             
         except Exception as e:
-            logger.error(f"Failed to load YOLO model: {str(e)}")
-            raise RuntimeError(f"Failed to load YOLO model: {str(e)}")
-    
+            logger.error(f"Failed to load YOLO model: {e}")
+            raise
+            
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
         """
-        Detect objects in an image using YOLO.
+        Detect objects in an image.
         
         Args:
             image: Image as numpy array
@@ -221,30 +220,31 @@ class YOLODetector(ObjectDetector):
             List of detection dictionaries
         """
         try:
-            # Run inference
-            results = self.model(image)
-            
-            # Convert results to our format
+            # For YOLOv8 API
+            results = self.model(image, conf=self.confidence_threshold, verbose=False)
             detections = []
-            for det in results.xyxy[0]:  # xyxy format
-                x1, y1, x2, y2, conf, cls = det.cpu().numpy()
-                class_id = int(cls)
-                class_name = results.names[class_id]
+            
+            for result in results:
+                boxes = result.boxes
                 
-                detections.append({
-                    "detection_type": class_name,
-                    "confidence": float(conf),
-                    "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                    "metadata": {
-                        "class_id": class_id,
-                        "frame_size": [image.shape[1], image.shape[0]]
+                for i, box in enumerate(boxes):
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    conf = float(box.conf[0])
+                    cls = int(box.cls[0])
+                    class_name = result.names[cls]
+                    
+                    detection = {
+                        "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                        "confidence": float(conf),
+                        "class_id": int(cls),
+                        "class_name": class_name
                     }
-                })
+                    detections.append(detection)
             
             return detections
             
         except Exception as e:
-            logger.error(f"Error during YOLO detection: {str(e)}")
+            logger.error(f"Detection failed: {e}")
             return []
 
 

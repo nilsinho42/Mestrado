@@ -354,11 +354,18 @@ class VideoTrackingProcessor(VideoProcessor):
         super().__init__(output_dir=output_dir)
         # Will be initialized with provider-specific trackers
         self.trackers = {}
+        # Storage providers for uploading/downloading videos
+        self.storage_providers = {}
     
     def register_tracker(self, provider: str, tracker: Any) -> None:
         """Register a tracker for a specific provider."""
         self.trackers[provider] = tracker
         logger.info(f"Registered tracker for provider: {provider}")
+    
+    def register_storage_provider(self, provider: str, storage_provider: Any) -> None:
+        """Register a storage provider for a specific provider."""
+        self.storage_providers[provider] = storage_provider
+        logger.info(f"Registered storage provider for provider: {provider}")
     
     def process_video(self, video_path: str, 
                      providers: List[str] = None) -> Dict[str, Any]:

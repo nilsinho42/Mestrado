@@ -1,4 +1,4 @@
-package db
+package models
 
 import (
 	"time"
@@ -89,4 +89,50 @@ type Location struct {
 	Longitude   float64   `json:"longitude"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// ProcessedVideo represents a processed video in the system
+type ProcessedVideo struct {
+	ID           int64     `json:"id"`
+	VideoPath    string    `json:"video_path"`
+	ProcessingID string    `json:"processing_id"`
+	Status       string    `json:"status"`
+	UserID       int64     `json:"user_id"`
+	ErrorMessage string    `json:"error_message"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// DetectionResult represents a detection result for a video
+type DetectionResult struct {
+	ID            int64     `json:"id"`
+	VideoID       int64     `json:"video_id"`
+	FrameNumber   int       `json:"frame_number"`
+	DetectionType string    `json:"detection_type"`
+	Confidence    float64   `json:"confidence"`
+	BBox          string    `json:"bbox"`
+	Metadata      string    `json:"metadata"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ServiceComparison represents a comparison between different ML services
+type ServiceComparison struct {
+	ID             int64     `json:"id"`
+	VideoID        int64     `json:"video_id"`
+	ServiceName    string    `json:"service_name"`
+	ProcessingTime float64   `json:"processing_time"`
+	MemoryUsage    float64   `json:"memory_usage"`
+	Accuracy       float64   `json:"accuracy"`
+	Metadata       string    `json:"metadata"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// PerformanceMetric represents a performance metric for a service
+type PerformanceMetric struct {
+	ID          int64     `json:"id"`
+	ServiceName string    `json:"service_name"`
+	MetricType  string    `json:"metric_type"`
+	Value       float64   `json:"value"`
+	Timestamp   time.Time `json:"timestamp"`
+	Metadata    string    `json:"metadata"`
 }

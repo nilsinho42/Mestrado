@@ -115,11 +115,11 @@ class AWSS3Storage(CloudStorageProvider):
         """
         super().__init__(name="aws_s3")
         
-        self.bucket_name = bucket_name or os.getenv("AWS_S3_BUCKET")
+        self.bucket_name = bucket_name or os.getenv("AWS_BUCKET_NAME")
         self.region = region or os.getenv("AWS_REGION", "us-east-1")
         
         if not self.bucket_name:
-            raise ValueError("S3 bucket name not provided and AWS_S3_BUCKET environment variable not set")
+            raise ValueError("S3 bucket name not provided and AWS_BUCKET_NAME environment variable not set")
         
         # Initialize boto3 client
         self.s3_client = None
@@ -344,8 +344,11 @@ class AzureBlobStorage(CloudStorageProvider):
         # Get connection info
         self.connection_string = connection_string or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         self.account_name = account_name or os.getenv("AZURE_STORAGE_ACCOUNT")
-        self.account_key = account_key or os.getenv("AZURE_STORAGE_KEY")
-        
+        self.account_key = account_key or os.getenv("AZURE_KEY")
+        logger.info(self.connection_string)
+        logger.info(self.account_name)
+        logger.info(self.account_key)
+
         if not self.connection_string and not (self.account_name and self.account_key):
             raise ValueError("Neither connection string nor account credentials provided")
         
@@ -355,7 +358,7 @@ class AzureBlobStorage(CloudStorageProvider):
         
         try:
             from azure.storage.blob import BlobServiceClient, ContainerClient
-            
+
             if self.connection_string:
                 self.blob_service_client = BlobServiceClient.from_connection_string(self.connection_string)
             else:

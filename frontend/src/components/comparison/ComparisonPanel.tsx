@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Button, Card, Typography, Space, Alert, Table, Tabs, Spin, Progress, Statistic } from 'antd';
-import { UploadOutlined, LineChartOutlined, CheckCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { Button, Card, Typography, Space, Alert, Tabs, Spin, Progress, Statistic } from 'antd';
+import { UploadOutlined, CheckCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { uploadVideo, getProcessingStatus } from '../../services/videoProcessing';
 import { ProcessingResult } from '../../types/video-processing';
 
