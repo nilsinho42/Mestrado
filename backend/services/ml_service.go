@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -30,7 +31,7 @@ func NewMLService(config MLServiceConfig) *MLService {
 	return &MLService{
 		config: config,
 		client: &http.Client{
-			Timeout: 60 * time.Second, // Longer timeout for video processing
+			Timeout: 300 * time.Second, // Increased timeout to 5 minutes for video processing
 		},
 	}
 }
@@ -39,7 +40,7 @@ func NewMLService(config MLServiceConfig) *MLService {
 func (s *MLService) UploadVideo(file *multipart.FileHeader) (string, error) {
 	// Create a unique processing ID
 	processingID := fmt.Sprintf("proc_%d", time.Now().UnixNano())
-	fmt.Printf("Starting video upload: %s, size: %d\n", file.Filename, file.Size)
+	fmt.Printf("Starting video upload: %s, size: %d, processingID: %s\n", file.Filename, file.Size, processingID)
 
 	// Save the file locally first
 	uploadDir := "uploads"
@@ -73,11 +74,12 @@ func (s *MLService) UploadVideo(file *multipart.FileHeader) (string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
-	// Add the processing ID to the form
+	// Add the processing ID to the form as form field
 	if err := writer.WriteField("processing_id", processingID); err != nil {
 		fmt.Printf("Error adding processing ID to form: %v\n", err)
 		return "", fmt.Errorf("failed to add processing ID to form: %w", err)
 	}
+	fmt.Printf("Added processing_id to form: %s\n", processingID)
 
 	// Add the file to the form
 	src.Seek(0, 0) // Reset file position
@@ -143,13 +145,60 @@ func (s *MLService) UploadVideo(file *multipart.FileHeader) (string, error) {
 
 // GetVideoStatus checks the status of a video processing job
 func (s *MLService) GetVideoStatus(processingID string) (map[string]interface{}, error) {
+	fmt.Printf("GetVideoStatus: Checking status for processing ID: %s\n", processingID)
+
+	// Create the request
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/videos/%s/status", s.config.BaseURL, processingID), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Send the request
 	resp, err := s.client.Do(req)
 	if err != nil {
+		// If timeout or connection error, try with a shortened processing ID as fallback
+		if processingID != "" && len(processingID) > 15 && strings.HasPrefix(processingID, "proc_") {
+			// Extract timestamp part (first 13 digits after "proc_")
+			parts := strings.SplitN(processingID, "_", 2)
+			if len(parts) > 1 {
+				timestampPart := parts[1]
+				if len(timestampPart) > 13 {
+					timestampPart = timestampPart[:13]
+				}
+
+				fallbackID := "proc_" + timestampPart
+				fmt.Printf("Original request failed, trying with fallback ID: %s\n", fallbackID)
+
+				// Create a new request with the fallback ID
+				fallbackReq, fallbackErr := http.NewRequest("GET",
+					fmt.Sprintf("%s/api/videos/%s/status", s.config.BaseURL, fallbackID), nil)
+
+				if fallbackErr != nil {
+					return nil, fmt.Errorf("failed to create fallback request: %w", fallbackErr)
+				}
+
+				// Send the fallback request
+				fallbackResp, fallbackErr := s.client.Do(fallbackReq)
+				if fallbackErr != nil {
+					return nil, fmt.Errorf("failed with both original ID and fallback ID: %w", err)
+				}
+				defer fallbackResp.Body.Close()
+
+				if fallbackResp.StatusCode != http.StatusOK {
+					bodyContent, _ := io.ReadAll(fallbackResp.Body)
+					return nil, fmt.Errorf("ML service returned error for fallback ID (status %d): %s",
+						fallbackResp.StatusCode, string(bodyContent))
+				}
+
+				var result map[string]interface{}
+				if err := json.NewDecoder(fallbackResp.Body).Decode(&result); err != nil {
+					return nil, fmt.Errorf("failed to decode fallback response: %w", err)
+				}
+
+				return result, nil
+			}
+		}
+
 		return nil, fmt.Errorf("failed to send request to ML service: %w", err)
 	}
 	defer resp.Body.Close()

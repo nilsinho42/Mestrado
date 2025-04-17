@@ -3,274 +3,259 @@ import os
 from dotenv import load_dotenv
 import json
 from typing import Dict, Any, List, Union
+import logging
 
 # Load environment variables from root directory
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env'))
 
+logger = logging.getLogger(__name__)
+
 class Database:
-    def __init__(self):
-        """Initialize database connection using environment variables."""
-        self.connection_params = {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'port': os.getenv('DB_PORT', '5432'),
-            'user': os.getenv('DB_USER', 'postgres'),
-            'password': os.getenv('DB_PASSWORD', 'postgres'),
-            'database': os.getenv('DB_NAME', 'ml_comparison')
-        }
+    """Database utility for storing metrics and tracking results."""
+    
+    def __init__(self, host=None, port=None, dbname=None, user=None, password=None,
+                db_url=None, disable_db=False):
+        """
+        Initialize database connection.
         
-        self.connection = None
+        Args:
+            host: Database host
+            port: Database port
+            dbname: Database name
+            user: Database user
+            password: Database password
+            db_url: Database URL (alternative to separate parameters)
+            disable_db: If True, disable database functionality
+        """
+        self.conn = None
         self.cursor = None
-    
-    def connect(self):
-        """Establish connection to the database."""
+        self.db_enabled = not disable_db
+        
+        if disable_db:
+            logger.info("Database functionality is disabled")
+            return
+        
+        # Try to connect to database
         try:
-            self.connection = psycopg2.connect(**self.connection_params)
-            self.cursor = self.connection.cursor()
-            return True
-        except psycopg2.Error as e:
-            print(f"Error connecting to database: {e}")
-            return False
-    
-    def disconnect(self):
-        """Close database connection."""
-        if self.cursor:
-            self.cursor.close()
-        if self.connection:
-            self.connection.close()
+            if db_url:
+                self.conn = psycopg2.connect(db_url)
+            else:
+                # Get database connection details from environment variables if not provided
+                host = host or os.getenv("DB_HOST", "postgres")
+                port = port or os.getenv("DB_PORT", "5432")
+                dbname = dbname or os.getenv("DB_NAME", "postgres")
+                user = user or os.getenv("DB_USER", "postgres")
+                password = password or os.getenv("DB_PASSWORD", "postgres")
+                
+                self.conn = psycopg2.connect(
+                    host=host,
+                    port=port,
+                    dbname=dbname,
+                    user=user,
+                    password=password
+                )
+            
+            self.conn.autocommit = True
+            self.cursor = self.conn.cursor()
+            logger.info("Connected to database")
+        except Exception as e:
+            logger.error(f"Error connecting to database: {str(e)}")
+            logger.warning("Database functionality will be disabled")
+            self.db_enabled = False
     
     def create_tables(self):
-        """Create necessary tables if they don't exist."""
-        try:
-            self.connect()
+        """Create required tables if they don't exist."""
+        if not self.db_enabled or self.cursor is None:
+            logger.warning("Skipping table creation as database is disabled or connection failed")
+            return
             
-            # Create metrics table for image and video processing
+        try:
+            # Create metrics table
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS metrics (
                     id SERIAL PRIMARY KEY,
                     image_id VARCHAR(255),
-                    source VARCHAR(50) NOT NULL,
+                    source VARCHAR(50),
                     latency FLOAT,
                     total_processing_time FLOAT,
-                    precision FLOAT,
-                    recall FLOAT,
                     cost_image_processing FLOAT,
                     cost_video_processing FLOAT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
-            # Create detection results table for Task A
-            self.cursor.execute("""
-                CREATE TABLE IF NOT EXISTS detection_results (
-                    id SERIAL PRIMARY KEY,
-                    image_id VARCHAR(255) NOT NULL,
-                    source VARCHAR(50) NOT NULL,
-                    latency FLOAT NOT NULL,
-                    people_count INTEGER NOT NULL,
-                    vehicles_count INTEGER NOT NULL,
-                    detection_data JSONB,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            # Create tracking results table for Task B
+            # Create tracking results table
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tracking_results (
                     id SERIAL PRIMARY KEY,
-                    video_id VARCHAR(255) NOT NULL,
-                    source VARCHAR(50) NOT NULL,
-                    processing_time FLOAT NOT NULL,
-                    people_tracked INTEGER NOT NULL,
-                    vehicles_tracked INTEGER NOT NULL,
+                    video_id VARCHAR(255),
+                    source VARCHAR(50),
+                    processing_time FLOAT,
+                    people_tracked INTEGER,
+                    vehicles_tracked INTEGER,
                     tracking_data JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
-            self.connection.commit()
-            return True
-            
-        except psycopg2.Error as e:
-            print(f"Error creating tables: {e}")
-            return False
-        finally:
-            self.disconnect()
+            logger.info("Created database tables")
+        except Exception as e:
+            logger.error(f"Error creating tables: {str(e)}")
+            self.db_enabled = False
     
-    def save_detection_results(self, results: Dict[str, Any]):
-        """Save Task A detection results to the database."""
-        try:
-            self.connect()
+    def save_metrics(self, metrics_data):
+        """
+        Save metrics to database.
+        
+        Args:
+            metrics_data: Dictionary with metrics data
+        """
+        if not self.db_enabled or self.cursor is None:
+            logger.debug("Skipping metrics storage as database is disabled")
+            return
             
+        try:
+            # Extract fields
+            image_id = metrics_data.get('image_id', '')
+            source = metrics_data.get('source', 'unknown')
+            latency = metrics_data.get('latency', 0)
+            total_processing_time = metrics_data.get('total_processing_time', 0)
+            cost_image_processing = metrics_data.get('cost_image_processing', 0)
+            cost_video_processing = metrics_data.get('cost_video_processing', 0)
+            
+            # Insert into database
             self.cursor.execute("""
-                INSERT INTO detection_results 
-                (image_id, source, latency, people_count, vehicles_count, detection_data) 
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id
+                INSERT INTO metrics (
+                    image_id, source, latency, total_processing_time, 
+                    cost_image_processing, cost_video_processing
+                ) VALUES (%s, %s, %s, %s, %s, %s)
             """, (
-                results['image_id'],
-                results['source'],
-                results['latency'],
-                results['people_count'],
-                results['vehicles_count'],
-                json.dumps(results.get('detection_data', {}))
+                image_id, source, latency, total_processing_time,
+                cost_image_processing, cost_video_processing
             ))
             
-            result_id = self.cursor.fetchone()[0]
-            self.connection.commit()
-            return result_id
-            
-        except psycopg2.Error as e:
-            print(f"Error saving detection results: {e}")
-            return None
-        finally:
-            self.disconnect()
+            logger.debug(f"Saved metrics for {image_id}")
+        except Exception as e:
+            logger.error(f"Error saving metrics: {str(e)}")
     
-    def save_tracking_results(self, results: Dict[str, Any]):
-        """Save Task B tracking results to the database."""
-        try:
-            self.connect()
+    def save_tracking_results(self, tracking_data):
+        """
+        Save tracking results to database.
+        
+        Args:
+            tracking_data: Dictionary with tracking results
+        """
+        if not self.db_enabled or self.cursor is None:
+            logger.debug("Skipping tracking results storage as database is disabled")
+            return
             
+        try:
+            # Extract fields
+            video_id = tracking_data.get('video_id', '')
+            source = tracking_data.get('source', 'unknown')
+            processing_time = tracking_data.get('processing_time', 0)
+            people_tracked = tracking_data.get('people_tracked', 0)
+            vehicles_tracked = tracking_data.get('vehicles_tracked', 0)
+            
+            # Convert tracking data to JSON string
+            tracking_json = json.dumps(tracking_data.get('tracking_data', {}))
+            
+            # Insert into database
             self.cursor.execute("""
-                INSERT INTO tracking_results 
-                (video_id, source, processing_time, people_tracked, vehicles_tracked, tracking_data) 
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id
+                INSERT INTO tracking_results (
+                    video_id, source, processing_time, people_tracked,
+                    vehicles_tracked, tracking_data
+                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
             """, (
-                results['video_id'],
-                results['source'],
-                results['processing_time'],
-                results['people_tracked'],
-                results['vehicles_tracked'],
-                json.dumps(results.get('tracking_data', {}))
+                video_id, source, processing_time, people_tracked,
+                vehicles_tracked, tracking_json
             ))
             
-            result_id = self.cursor.fetchone()[0]
-            self.connection.commit()
-            return result_id
-            
-        except psycopg2.Error as e:
-            print(f"Error saving tracking results: {e}")
-            return None
-        finally:
-            self.disconnect()
+            logger.debug(f"Saved tracking results for {video_id}")
+        except Exception as e:
+            logger.error(f"Error saving tracking results: {str(e)}")
     
-    def save_metrics(self, metrics: Dict[str, Any]):
-        """Save combined metrics for Task A and Task B."""
+    def get_metrics(self, source=None, limit=10):
+        """
+        Get metrics from database.
+        
+        Args:
+            source: Filter by source
+            limit: Maximum number of results
+            
+        Returns:
+            List of metrics dictionaries
+        """
+        if not self.db_enabled or self.cursor is None:
+            logger.debug("Cannot get metrics as database is disabled")
+            return []
+            
         try:
-            self.connect()
-            
-            self.cursor.execute("""
-                INSERT INTO metrics 
-                (image_id, source, latency, total_processing_time, precision, recall, cost_image_processing, cost_video_processing) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-            """, (
-                metrics.get('image_id', None),
-                metrics['source'],
-                metrics.get('latency', None),
-                metrics.get('total_processing_time', None),
-                metrics.get('precision', None),
-                metrics.get('recall', None),
-                metrics.get('cost_image_processing', 0.0),
-                metrics.get('cost_video_processing', 0.0)
-            ))
-            
-            metric_id = self.cursor.fetchone()[0]
-            self.connection.commit()
-            return metric_id
-            
-        except psycopg2.Error as e:
-            print(f"Error saving metrics: {e}")
-            return None
-        finally:
-            self.disconnect()
-    
-    def get_detection_results(self, image_id: str = None, source: str = None):
-        """Retrieve detection results from the database."""
-        try:
-            self.connect()
-            
-            query = "SELECT * FROM detection_results WHERE 1=1"
-            params = []
-            
-            if image_id:
-                query += " AND image_id = %s"
-                params.append(image_id)
-            
             if source:
-                query += " AND source = %s"
-                params.append(source)
-                
-            query += " ORDER BY created_at DESC"
+                self.cursor.execute("""
+                    SELECT * FROM metrics WHERE source = %s
+                    ORDER BY created_at DESC LIMIT %s
+                """, (source, limit))
+            else:
+                self.cursor.execute("""
+                    SELECT * FROM metrics ORDER BY created_at DESC LIMIT %s
+                """, (limit,))
             
-            self.cursor.execute(query, params)
             columns = [desc[0] for desc in self.cursor.description]
-            results = [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+            results = []
+            
+            for row in self.cursor.fetchall():
+                results.append(dict(zip(columns, row)))
             
             return results
-            
-        except psycopg2.Error as e:
-            print(f"Error retrieving detection results: {e}")
+        except Exception as e:
+            logger.error(f"Error getting metrics: {str(e)}")
             return []
-        finally:
-            self.disconnect()
     
-    def get_tracking_results(self, video_id: str = None, source: str = None):
-        """Retrieve tracking results from the database."""
+    def get_tracking_results(self, source=None, limit=10):
+        """
+        Get tracking results from database.
+        
+        Args:
+            source: Filter by source
+            limit: Maximum number of results
+            
+        Returns:
+            List of tracking results dictionaries
+        """
+        if not self.db_enabled or self.cursor is None:
+            logger.debug("Cannot get tracking results as database is disabled")
+            return []
+            
         try:
-            self.connect()
-            
-            query = "SELECT * FROM tracking_results WHERE 1=1"
-            params = []
-            
-            if video_id:
-                query += " AND video_id = %s"
-                params.append(video_id)
-            
             if source:
-                query += " AND source = %s"
-                params.append(source)
-                
-            query += " ORDER BY created_at DESC"
+                self.cursor.execute("""
+                    SELECT * FROM tracking_results WHERE source = %s
+                    ORDER BY created_at DESC LIMIT %s
+                """, (source, limit))
+            else:
+                self.cursor.execute("""
+                    SELECT * FROM tracking_results ORDER BY created_at DESC LIMIT %s
+                """, (limit,))
             
-            self.cursor.execute(query, params)
             columns = [desc[0] for desc in self.cursor.description]
-            results = [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+            results = []
+            
+            for row in self.cursor.fetchall():
+                # Convert JSONB to dict
+                row_dict = dict(zip(columns, row))
+                row_dict['tracking_data'] = row_dict['tracking_data']
+                results.append(row_dict)
             
             return results
-            
-        except psycopg2.Error as e:
-            print(f"Error retrieving tracking results: {e}")
+        except Exception as e:
+            logger.error(f"Error getting tracking results: {str(e)}")
             return []
-        finally:
-            self.disconnect()
     
-    def get_metrics(self, image_id: str = None, source: str = None):
-        """Retrieve metrics from the database."""
-        try:
-            self.connect()
-            
-            query = "SELECT * FROM metrics WHERE 1=1"
-            params = []
-            
-            if image_id:
-                query += " AND image_id = %s"
-                params.append(image_id)
-            
-            if source:
-                query += " AND source = %s"
-                params.append(source)
-                
-            query += " ORDER BY created_at DESC"
-            
-            self.cursor.execute(query, params)
-            columns = [desc[0] for desc in self.cursor.description]
-            results = [dict(zip(columns, row)) for row in self.cursor.fetchall()]
-            
-            return results
-            
-        except psycopg2.Error as e:
-            print(f"Error retrieving metrics: {e}")
-            return []
-        finally:
-            self.disconnect() 
+    def close(self):
+        """Close database connection."""
+        if self.cursor:
+            self.cursor.close()
+        if self.conn:
+            self.conn.close()
+            logger.info("Database connection closed") 

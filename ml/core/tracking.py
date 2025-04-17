@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple, Any, Union
 import uuid
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -364,8 +365,8 @@ class IoUTracker(BaseTracker):
 
 class DeepSORTTracker(BaseTracker):
     """
-    DeepSORT tracker integration.
-    This is a placeholder and will be implemented with actual DeepSORT code.
+    DeepSORT tracker implementation for object tracking.
+    Integrates with YOLO detection for robust tracking.
     """
     
     def __init__(self, model_path: Optional[str] = None, max_age: int = 30, 
@@ -374,22 +375,120 @@ class DeepSORTTracker(BaseTracker):
         self.max_age = max_age
         self.n_init = n_init
         self.model_path = model_path
-        # Fallback to IoU tracker for now
-        self.iou_tracker = IoUTracker(name=f"{name}_fallback")
-        logger.warning(f"DeepSORT tracker is a placeholder. Using IoU tracker as fallback.")
+        
+        # Define target class names (vehicles and people only)
+        self.target_people_classes = ['person', 'pedestrian', 'man', 'woman', 'child']
+        self.target_vehicle_classes = ['car', 'truck', 'bus', 'motorcycle', 'vehicle', 'bicycle']
+        
+        # Initialize YOLOv11n detector specifically for tracking
+        try:
+            from main import get_detector_for_provider
+            self.detector = get_detector_for_provider("yolov11n")
+            if not self.detector:
+                # Create dedicated detector for tracking
+                from .models import YOLODetector
+                
+                # Require YOLOv11n - no fallbacks allowed
+                if not os.path.exists("yolov11n.pt"):
+                    error_msg = (
+                        "YOLOv11n model not found. This model is required for object tracking. "
+                        "Please run download_models.py first or manually download YOLOv11n.pt "
+                        "and place it in the application root directory."
+                    )
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
+                    
+                # Create the detector with YOLOv11n
+                self.detector = YOLODetector(
+                    model_path="yolov11n.pt",
+                    confidence_threshold=0.3,
+                    name="yolov11n"
+                )
+                logger.info("DeepSORT tracker initialized with YOLOv11n detector")
+            else:
+                logger.info("DeepSORT tracker initialized with YOLOv11n detector from global registry")
+        except Exception as e:
+            error_msg = f"Failed to initialize YOLOv11n detector for DeepSORT: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+    
+    def is_target_class(self, class_name: str) -> bool:
+        """Check if the class is a target class (vehicle or person)."""
+        class_name_lower = class_name.lower()
+        return any(cls in class_name_lower for cls in self.target_people_classes) or \
+               any(cls in class_name_lower for cls in self.target_vehicle_classes)
     
     def update(self, detections: List[Detection]) -> List[TrackedObject]:
         """
         Update tracker with new detections.
-        Currently falls back to IoU tracker.
+        Implements DeepSORT tracking algorithm.
         """
-        # This will be replaced with actual DeepSORT implementation
-        return self.iou_tracker.update(detections)
+        self.current_frame += 1
+        
+        # Filter for only people and vehicles
+        filtered_detections = [det for det in detections if self.is_target_class(det.class_name)]
+        
+        # If no tracks exist, create new tracks for all filtered detections
+        if not self.tracks:
+            for detection in filtered_detections:
+                track = TrackedObject.from_detection(detection, self.next_id)
+                self.tracks.append(track)
+                self.next_id += 1
+            return self.get_active_tracks()
+        
+        # Match detections to existing tracks using IoU
+        matched_track_indices = set()
+        matched_detection_indices = set()
+        
+        # Update existing tracks with matched detections
+        for i, track in enumerate(self.tracks):
+            best_iou = 0.3  # IoU threshold
+            best_detection_idx = None
+            
+            for j, detection in enumerate(filtered_detections):
+                if j in matched_detection_indices:
+                    continue
+                
+                # For DeepSORT, we can match across class boundaries if needed
+                # but prefer same-class matches
+                class_match_bonus = 0.2 if track.class_name == detection.class_name else 0
+                
+                # Calculate IoU
+                if track.bbox_history:
+                    iou = IoUTracker.calculate_iou(track.bbox_history[-1], detection.bbox)
+                    # Apply class match bonus
+                    iou += class_match_bonus
+                    
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_detection_idx = j
+            
+            if best_detection_idx is not None:
+                track.update(filtered_detections[best_detection_idx])
+                matched_track_indices.add(i)
+                matched_detection_indices.add(best_detection_idx)
+            else:
+                track.frames_since_last_update += 1
+        
+        # Create new tracks for unmatched detections
+        for i, detection in enumerate(filtered_detections):
+            if i not in matched_detection_indices:
+                track = TrackedObject.from_detection(detection, self.next_id)
+                self.tracks.append(track)
+                self.next_id += 1
+        
+        # Remove stale tracks
+        self.tracks = [
+            track for track in self.tracks 
+            if track.frames_since_last_update <= self.max_age
+        ]
+        
+        # Return only active tracks (those updated in current frame)
+        return self.get_active_tracks()
     
     def process_video(self, video_path: str) -> Dict[str, Any]:
         """
         Process a video file for object tracking.
-        Currently falls back to IoU tracker.
         
         Args:
             video_path: Path to the video file
@@ -397,17 +496,132 @@ class DeepSORTTracker(BaseTracker):
         Returns:
             Dictionary with tracking results
         """
-        # Use the IoU tracker's process_video method as a fallback
-        return self.iou_tracker.process_video(video_path)
+        import cv2
+        import time
+        import numpy as np
+        from pathlib import Path
+        
+        # Reset tracker state for new video
+        self.reset()
+        
+        # Start timing
+        start_time = time.time()
+        
+        # Open the video
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.error(f"Could not open video file: {video_path}")
+            return {"error": "Could not open video file"}
+        
+        # Get video properties
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Initialize results
+        all_tracks = []
+        frame_results = []
+        people_tracked = 0
+        vehicles_tracked = 0
+        
+        # Process frames
+        frame_idx = 0
+        
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Process frame with detector if available
+                if hasattr(self, 'detector') and self.detector:
+                    detections_dict = self.detector.detect(frame)
+                    # Convert detection dictionaries to Detection objects
+                    detections = []
+                    for det in detections_dict:
+                        class_name = det.get("class_name", det.get("detection_type", "unknown"))
+                        
+                        # Only include target classes (people and vehicles)
+                        if self.is_target_class(class_name):
+                            detections.append(Detection(
+                                frame_number=frame_idx,
+                                class_name=class_name,
+                                confidence=det.get("confidence", 0.0),
+                                bbox=det.get("bbox", [0, 0, 0, 0]),
+                                service=self.name.split('_')[0],
+                                class_id=det.get("class_id"),
+                                metadata=det.get("metadata", {})
+                            ))
+                else:
+                    # Skip detection if no detector available
+                    detections = []
+                
+                # Update tracker with new detections
+                active_tracks = self.update(detections)
+                
+                # Store tracks for this frame
+                frame_result = {
+                    "frame_number": frame_idx,
+                    "detections": [d.__dict__ for d in detections],
+                    "active_tracks": [t.to_dict() for t in active_tracks],
+                }
+                frame_results.append(frame_result)
+                
+                # Add unique tracks to overall results
+                for track in active_tracks:
+                    if track.id not in [t.id for t in all_tracks]:
+                        all_tracks.append(track)
+                
+                frame_idx += 1
+                
+        finally:
+            cap.release()
+        
+        # Calculate processing time
+        processing_time = time.time() - start_time
+        
+        # Count objects by class
+        class_counts = self.count_by_class()
+        
+        # Count people and vehicles
+        people_tracked = sum([
+            class_counts.get(people_class, 0) 
+            for people_class in self.target_people_classes
+        ])
+        vehicles_tracked = sum([
+            class_counts.get(vehicle_class, 0) 
+            for vehicle_class in self.target_vehicle_classes
+        ])
+        
+        # Build final results
+        results = {
+            "video_path": video_path,
+            "video_name": Path(video_path).stem,
+            "processing_time": processing_time,
+            "frames_processed": frame_idx,
+            "unique_tracks": len(all_tracks),
+            "class_counts": class_counts,
+            "frame_results": frame_results,
+            "tracks": [t.to_dict() for t in self.get_unique_objects()],
+            "summary": {
+                "people_tracked": people_tracked,
+                "vehicle_tracked": vehicles_tracked,
+                "processing_time": processing_time,
+                "cost": 0.0  # Local processing has no cloud cost
+            }
+        }
+        
+        return results
 
 
-# Factory function to create the appropriate tracker based on provider
+# Factory function to create tracker based on provider
 def create_tracker(provider: str, **kwargs) -> BaseTracker:
     """
     Create an appropriate tracker based on the provider.
     
     Args:
-        provider: Provider name ('local', 'aws', 'azure')
+        provider: Provider name ('local', 'aws', 'azure', 'deepsort')
         **kwargs: Additional configuration for the tracker
     
     Returns:
@@ -415,19 +629,23 @@ def create_tracker(provider: str, **kwargs) -> BaseTracker:
     """
     name = kwargs.get('name', provider)
     
-    if provider.lower() == 'local':
-        # For local processing, use IoU tracker by default
-        return IoUTracker(name=f"{name}_tracker", **kwargs)
+    if provider.lower() == 'deepsort':
+        # For DeepSORT - dedicated tracker implementation
+        return DeepSORTTracker(name=name, **kwargs)
+        
+    elif provider.lower() == 'local':
+        # For local processing, use DeepSORT tracker
+        return DeepSORTTracker(name=f"{name}_tracker", **kwargs)
     
     elif provider.lower() == 'aws':
-        # For AWS, we'll use a placeholder for AWS Fargate + DeepSORT
+        # For AWS, use DeepSORT tracker
         return DeepSORTTracker(name=f"{name}_tracker", **kwargs)
     
     elif provider.lower() == 'azure':
-        # For Azure, we'll use a placeholder for Azure Container App + DeepSORT
+        # For Azure, use DeepSORT tracker
         return DeepSORTTracker(name=f"{name}_tracker", **kwargs)
     
     else:
-        # Default to IoU tracker
+        # Default to IoU tracker as fallback
         logger.warning(f"Unknown provider '{provider}'. Using default IoU tracker.")
         return IoUTracker(name=f"{name}_tracker", **kwargs)

@@ -39,3 +39,5 @@ yarn-error.log*
 ml/cloud_comparison/annotated_frames/
 ml/cloud_comparison/results/
 papers/
+data/
+uploads/

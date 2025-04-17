@@ -42,12 +42,15 @@ services:
       - "8000:8000"
     volumes:
       - ./ml/uploads:/app/uploads
+      - ./ml/data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
     env_file:
       - .env
     networks:
       - app-network
+    restart: always
+    command: "python -c \"import sys; sys.path.append('/app'); from api import app; import uvicorn; uvicorn.run(app, host='0.0.0.0', port=8000, log_level='info')\""
 
   postgres:
     image: postgres:15

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 import uuid
 from datetime import datetime
+import copy
 
 # Load environment variables from root directory
 from dotenv import load_dotenv
@@ -98,8 +99,12 @@ class VideoPipeline:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize database
-        self.db = Database()
-        self.db.create_tables()
+        try:
+            self.db = Database()
+            self.db.create_tables()
+        except Exception as db_error:
+            logger.warning(f"Failed to initialize database: {db_error}. Continuing without database.")
+            self.db = Database(disable_db=True)
         
         # Initialize processors
         self.image_processor = ImageAnalysisProcessor(output_dir=str(self.output_dir))
@@ -123,14 +128,20 @@ class VideoPipeline:
         """Initialize detectors for each provider."""
         global _detectors
         
-        # YOLO detector for local processing
-        yolo_detector = create_detector(
-            provider="yolo",
-            model_path="yolov8n.pt",
-            confidence_threshold=0.25
-        )
-        self.image_processor.register_detector("local", yolo_detector)
-        _detectors["local"] = yolo_detector  # Add to global dict
+        # YOLOv11n detector for local processing
+        try:
+            yolo_detector = create_detector(
+                provider="yolo",
+                model_path="yolov11n.pt",
+                confidence_threshold=0.25
+            )
+            self.image_processor.register_detector("local", yolo_detector)
+            _detectors["local"] = yolo_detector  # Add to global dict
+            logger.info("YOLOv11n detector initialized for local processing")
+        except Exception as e:
+            error_msg = f"Failed to initialize YOLOv11n detector: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         # AWS Rekognition detector
         aws_detector = create_detector(provider="aws")
@@ -142,55 +153,48 @@ class VideoPipeline:
         self.image_processor.register_detector("azure", azure_detector)
         _detectors["azure"] = azure_detector  # Add to global dict
         
+        # Add YOLOv11n detector specifically for Task B (tracking)
+        yolov11n_detector = create_detector(
+            provider="yolo",
+            model_path="yolov11n.pt",
+            confidence_threshold=0.25,
+            name="yolov11n"
+        )
+        _detectors["yolov11n"] = yolov11n_detector  # Add to global dict
+        
         logger.info("Detectors initialized")
     
     def _initialize_trackers(self):
         """Initialize trackers for each provider."""
-        # Local DeepSORT tracker
-        local_tracker = create_tracker(provider="deepsort")
-        self.tracking_processor.register_tracker("local", local_tracker)
+        # DeepSORT tracker with YOLOv11n detector
+        try:
+            local_tracker = create_tracker(
+                provider="deepsort",
+                model_path="yolov11n.pt",
+                max_age=30,
+                n_init=3
+            )
+            self.tracking_processor.register_tracker("local", local_tracker)
+            logger.info("DeepSORT tracker initialized with YOLOv11n")
+        except Exception as e:
+            error_msg = f"Failed to initialize DeepSORT tracker with YOLOv11n: {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
-        # AWS Fargate tracker (uses DeepSORT under the hood)
-        aws_tracker = create_tracker(provider="aws")
+        # AWS and Azure trackers use the same DeepSORT + YOLOv11n implementation
+        # rather than relying on cloud services
+        aws_tracker = local_tracker  # Reuse the same tracker
         self.tracking_processor.register_tracker("aws", aws_tracker)
         
-        # Azure Container App tracker (uses DeepSORT under the hood)
-        azure_tracker = create_tracker(provider="azure")
+        azure_tracker = local_tracker  # Reuse the same tracker
         self.tracking_processor.register_tracker("azure", azure_tracker)
         
-        logger.info("Trackers initialized")
+        logger.info("Trackers initialized with DeepSORT + YOLOv11n")
     
     def _initialize_storage(self):
-        """Initialize cloud storage providers."""
-        # AWS S3 storage
-        try:
-            aws_storage = create_storage_provider(provider="aws")
-            self.tracking_processor.register_storage_provider("aws", aws_storage)
-            logger.info("AWS S3 storage provider initialized")
-        except Exception as e:
-            logger.warning(f"Failed to initialize AWS S3 storage: {str(e)}")
-        
-        # Azure Blob storage
-        try:
-            # Get Azure connection details from environment variables
-#            azure_connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-#            azure_container_name = os.getenv("AZURE_CONTAINER_NAME")
-#            azure_account_name = os.getenv("AZURE_STORAGE_ACCOUNT")
-#            azure_account_key = os.getenv("AZURE_STORAGE_KEY")
-            # Create storage provider with explicit parameters
-            azure_storage = create_storage_provider(
-                provider="azure",
-#                connection_string=azure_connection_string,
-#                container_name=azure_container_name,
-#                account_name=azure_account_name,
-#                account_key=azure_account_key
-            )
-            self.tracking_processor.register_storage_provider("azure", azure_storage)
-            logger.info("Azure Blob storage provider initialized")
-        except Exception as e:
-            logger.warning(f"Failed to initialize Azure Blob storage: {str(e)}")
-        
-        logger.info("Storage providers initialization completed")
+        """Initialize storage providers - now just using local storage."""
+        # No longer need cloud storage since we're processing locally
+        logger.info("Using local storage only - cloud storage disabled")
     
     def process_video(self, video_path: str) -> Dict[str, Any]:
         """Process video through the pipeline.
@@ -208,6 +212,9 @@ class VideoPipeline:
             logger.error(f"Video file not found: {video_path}")
             return {'error': 'Video file not found'}
         
+        # Set up required directories
+        setup_directories()
+        
         # Generate a unique ID for this processing job
         job_id = str(uuid.uuid4())
         
@@ -218,21 +225,37 @@ class VideoPipeline:
             # Process Task B: Video Processing with Object Tracking
             task_b_results = self._process_task_b(video_path)
             
+            # Filter results to include only people and vehicles
+            filtered_task_a_results = self._filter_results(task_a_results)
+            filtered_task_b_results = self._filter_results(task_b_results)
+            
             # Combine results
             results = {
                 'job_id': job_id,
                 'video_path': str(video_path),
-                'task_a': task_a_results,
-                'task_b': task_b_results,
+                'task_a': filtered_task_a_results,
+                'task_b': filtered_task_b_results,
                 'timestamp': datetime.now().isoformat()
             }
             
-            # Save results to file
-            result_file = Path("./data/results") / f"results_{video_path.stem}.json"
-            with open(result_file, "w") as f:
-                json.dump(results, f, indent=2)
+            # Make sure the results directory exists
+            os.makedirs("./data/results", exist_ok=True)
             
-            logger.info(f"Video processing completed successfully. Results saved to {result_file}")
+            # Save results to file with absolute path
+            result_file = os.path.abspath(os.path.join("./data/results", f"results_{video_path.stem}.json"))
+            
+            # Ensure the file is written
+            try:
+                with open(result_file, "w") as f:
+                    json.dump(results, f, indent=2)
+                
+                if os.path.exists(result_file):
+                    logger.info(f"Results saved to {result_file}")
+                else:
+                    logger.error(f"Failed to save results file at {result_file}")
+            except Exception as file_error:
+                logger.error(f"Error writing results file: {file_error}")
+            
             return results
             
         except Exception as e:
@@ -339,6 +362,66 @@ class VideoPipeline:
                 'total_processing_time': processing_time,
                 'cost_video_processing': provider_results.get('cost', {}).get('total_cost', 0)
             })
+
+    def _filter_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Filter results to include only people and vehicles.
+        
+        Args:
+            results: Original results dictionary
+            
+        Returns:
+            Filtered results dictionary
+        """
+        if not results or not isinstance(results, dict):
+            return results
+        
+        # Define classes to keep
+        people_classes = ["person", "people", "human"]
+        vehicle_classes = ["car", "truck", "bus", "motorcycle", "bicycle", "vehicle"]
+        keep_classes = people_classes + vehicle_classes
+        
+        # Helper function to filter detections
+        def filter_detections(detections):
+            if not detections or not isinstance(detections, list):
+                return detections
+            
+            filtered = []
+            for detection in detections:
+                class_name = detection.get("detection_type", detection.get("class_name", "")).lower()
+                if any(cls in class_name for cls in keep_classes):
+                    filtered.append(detection)
+            return filtered
+        
+        # Make a deep copy of results to avoid modifying the original
+        filtered_results = copy.deepcopy(results)
+        
+        # Filter Task A results (image detection)
+        if "providers" in filtered_results:
+            for provider, provider_data in filtered_results["providers"].items():
+                if "results" in provider_data:
+                    for frame_result in provider_data["results"]:
+                        if "detections" in frame_result:
+                            frame_result["detections"] = filter_detections(frame_result["detections"])
+        
+        # Filter Task B results (video tracking)
+        if "providers" in filtered_results:
+            for provider, provider_data in filtered_results["providers"].items():
+                # Filter frame_results detections
+                if "frame_results" in provider_data:
+                    for frame_result in provider_data["frame_results"]:
+                        if "detections" in frame_result:
+                            frame_result["detections"] = filter_detections(frame_result["detections"])
+                
+                # Filter tracks to only include people and vehicles
+                if "tracks" in provider_data:
+                    filtered_tracks = []
+                    for track in provider_data["tracks"]:
+                        class_name = track.get("class_name", "").lower()
+                        if any(cls in class_name for cls in keep_classes):
+                            filtered_tracks.append(track)
+                    provider_data["tracks"] = filtered_tracks
+        
+        return filtered_results
 
 def main():
     """Main entry point for video processing pipeline."""

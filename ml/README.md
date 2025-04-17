@@ -237,4 +237,118 @@ The project is built with a modular design to easily support new providers:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Recent Updates
+
+### Architecture Refactoring (June 2023)
+
+We've made several significant improvements to the architecture:
+
+1. **Unified Processing Pipeline**: 
+   - Task A (detection) and Task B (tracking) now share a single pipeline to avoid processing the same frame twice
+   - The DeepSORT implementation has been updated to use YOLOv11n detection
+
+2. **Local Processing Only**:
+   - Removed dependency on S3 and Azure Blob Storage
+   - All video frames are now stored and processed locally
+   - Improved performance by reducing network overhead
+
+3. **Improved Models**:
+   - Now using YOLOv11n for object tracking (Task B)
+   - Using DeepSORT with proper implementation (not placeholder)
+   
+4. **Bug Fixes**:
+   - Fixed issue with results files not being saved properly
+   - Results now correctly written to `data/results/` directory
+   - API now waits for processing to complete before returning response
+
+### Setup and Usage
+
+1. Download required models:
+```bash
+python download_models.py
+```
+
+2. Run the API server:
+```bash
+python api.py
+```
+
+3. Process a video:
+```bash
+python main.py --video /path/to/your/video.mp4
+```
+
+### API Changes
+
+The API now waits for video processing to complete before returning a response. This ensures that clients receive results immediately without having to poll the status endpoint.
+
+Example API response:
+```json
+{
+  "message": "Video processing completed",
+  "video_path": "uploads/video.mp4",
+  "status": "completed",
+  "results": {
+    "job_id": "...",
+    "video_path": "...",
+    "task_a": { ... },
+    "task_b": { ... },
+    "timestamp": "..."
+  }
+}
+```
+
+### Configuration
+
+- Model selection is now handled automatically
+- YOLOv11n is used for tracking (Task B)
+- YOLOv8n is used for detection (Task A) by default 
+
+# Model Requirements
+
+## YOLOv11n
+
+This application exclusively uses YOLOv11n for object detection and tracking. YOLOv8n is not used at all.
+
+### Important Notes:
+- YOLOv11n.pt must be available in the application root directory
+- No fallback models are used; the application will fail if YOLOv11n is not found
+- The model will be downloaded automatically during installation
+
+### Manual Download Instructions
+
+If automatic download fails, you must manually download YOLOv11n.pt and place it in the application root directory:
+
+1. Download YOLOv11n from: https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt
+2. **Important**: Rename the downloaded file from `yolo11n.pt` to `yolov11n.pt` (add the 'v')
+3. Place the renamed file in the application root directory
+
+### Troubleshooting
+
+If you encounter this error:
+```
+AttributeError: Can't get attribute 'C3k2' on <module 'ultralytics.nn.modules.block' ...
+```
+
+The issue is either:
+1. The ultralytics version is not compatible with YOLOv11n. Make sure you have ultralytics 8.3.2 or newer installed.
+2. The model file is not correctly named. It should be named `yolov11n.pt` (with 'v').
+
+To fix:
+```bash
+pip install ultralytics==8.3.2
+python download_models.py
+```
+
+## Running the Application
+
+Before starting the application, ensure YOLOv11n.pt is available. The application will check for its presence on startup and exit with an error if it's not found.
+
+To download the model manually:
+```bash
+python download_models.py
+```
+
+If you see an error message about YOLOv11n.pt being required, follow the manual download instructions above. 

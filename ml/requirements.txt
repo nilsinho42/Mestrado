@@ -7,15 +7,21 @@ python-dotenv==1.0.0
 requests==2.31.0
 psycopg2-binary==2.9.9
 
-# Image processing
-Pillow==10.1.0
+# Image processing - numpy must be installed before lap
 numpy==1.26.2
+Pillow==10.1.0
 opencv-python-headless==4.8.1.78
 
-# ML dependencies
+# ML dependencies - ultralytics must support YOLOv11n
 torch==2.1.1
 torchvision==0.16.1
-ultralytics==8.0.221
+ultralytics==8.3.2  # Updated to support YOLOv11n which requires C3k2 module
+
+# Make sure scipy is installed before lap
+scipy==1.11.3
+
+# Tracking dependencies - use specific version
+lap==0.5.12
 
 # AWS dependencies
 boto3==1.29.0

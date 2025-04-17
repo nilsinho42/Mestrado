@@ -3,11 +3,15 @@ Script to run the API server.
 """
 
 import sys
-import time
 import os
 import uvicorn
 import traceback
+import logging
 from pathlib import Path
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 def run_servers():
     """Run the API server."""
@@ -19,8 +23,19 @@ def run_servers():
             
         # Import and start the API server
         print("Starting API server...")
-        # Run directly with uvicorn instead of using the api module's start function
-        uvicorn.run("api:app", host="0.0.0.0", port=8000, log_level="info")
+        logger.debug("Starting uvicorn with api:app")
+        
+        # Run with increased timeouts for long-running requests
+        uvicorn.run(
+            "api:app", 
+            host="0.0.0.0", 
+            port=8000, 
+            log_level="info",
+            timeout_keep_alive=120,  # Increase keep-alive timeout
+            timeout_graceful_shutdown=30,  # Allow for graceful shutdown
+            limit_max_requests=0,  # No limit on requests
+            workers=1  # Single worker for simplicity
+        )
         
     except KeyboardInterrupt:
         print("\nShutting down server...")

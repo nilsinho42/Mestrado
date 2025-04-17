@@ -187,6 +187,16 @@ class YOLODetector(ObjectDetector):
         
         self.model = self._load_model()
         
+        # Define the classes we want to detect (COCO dataset)
+        # Only interested in people and vehicles
+        self.target_classes = {
+            0: 'person',        # person
+            2: 'car',           # car
+            3: 'motorcycle',    # motorcycle
+            5: 'bus',           # bus
+            7: 'truck'          # truck
+        }
+        
         logger.info(f"Loaded YOLO model from {model_path} on {self.device}")
     
     def _load_model(self) -> Any:
@@ -198,11 +208,27 @@ class YOLODetector(ObjectDetector):
             if self.model_path and os.path.exists(self.model_path):
                 # Load from file path
                 model = YOLO(self.model_path)
-                logger.info(f"Loaded YOLO model from {self.model_path}")
+                model_name = os.path.basename(self.model_path)
+                logger.info(f"Loaded YOLO model from {self.model_path} ({model_name})")
             else:
-                # If no model path, default to YOLOv8n
-                model = YOLO("yolov8n.pt")
-                logger.info("Loaded default YOLOv8n model")
+                # If no model path provided, check if we're loading for a specific task
+                if self.name == "yolov11n":
+                    # Only use YOLOv11n
+                    if os.path.exists("yolov11n.pt"):
+                        model = YOLO("yolov11n.pt")
+                        logger.info("Loaded YOLOv11n model for object tracking")
+                    else:
+                        error_msg = (
+                            "YOLOv11n model not found. This model is required for object tracking. "
+                            "Please run download_models.py first or manually download YOLOv11n.pt"
+                        )
+                        logger.error(error_msg)
+                        raise RuntimeError(error_msg)
+                else:
+                    # For other uses, require an explicit model path
+                    error_msg = "No model path specified and no default model available"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
             
             return model
             
@@ -234,13 +260,15 @@ class YOLODetector(ObjectDetector):
                     cls = int(box.cls[0])
                     class_name = result.names[cls]
                     
-                    detection = {
-                        "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                        "confidence": float(conf),
-                        "class_id": int(cls),
-                        "class_name": class_name
-                    }
-                    detections.append(detection)
+                    # Only include target classes (people and vehicles)
+                    if cls in self.target_classes:
+                        detection = {
+                            "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                            "confidence": float(conf),
+                            "class_id": int(cls),
+                            "class_name": class_name
+                        }
+                        detections.append(detection)
             
             return detections
             
@@ -265,6 +293,13 @@ class AWSRekognitionDetector(ObjectDetector):
         super().__init__(name=name)
         self.rekognition_client = rekognition_client
         self.confidence_threshold = confidence_threshold
+        
+        # Define people and vehicle classes for filtering
+        self.people_classes = ['Person', 'Human', 'People', 'Pedestrian', 
+                              'Man', 'Woman', 'Child', 'Baby']
+        self.vehicle_classes = ['Car', 'Vehicle', 'Automobile', 'Truck', 
+                               'Van', 'Bus', 'Motorcycle', 'Transportation', 
+                               'Taxi', 'Ambulance', 'Police Car']
         
         # Will be lazily initialized if needed
         if self.rekognition_client is None:
@@ -302,6 +337,10 @@ class AWSRekognitionDetector(ObjectDetector):
                 # Get label info
                 class_name = label['Name']
                 confidence = label['Confidence'] / 100.0  # Convert to 0-1 scale
+                
+                # Filter for people and vehicles
+                if class_name not in self.people_classes and class_name not in self.vehicle_classes:
+                    continue
                 
                 # Get bounding boxes if available
                 for instance in label.get('Instances', []):
@@ -351,6 +390,10 @@ class AzureVisionDetector(ObjectDetector):
         super().__init__(name=name)
         self.vision_client = vision_client
         self.confidence_threshold = confidence_threshold
+        
+        # Define people and vehicle classes for filtering
+        self.people_classes = ['person', 'people', 'man', 'woman', 'child']
+        self.vehicle_classes = ['car', 'vehicle', 'truck', 'van', 'bus', 'motorcycle', 'bicycle']
         
         # Will be lazily initialized if needed
         if self.vision_client is None:
@@ -404,7 +447,11 @@ class AzureVisionDetector(ObjectDetector):
                     continue
                 
                 # Get object info
-                class_name = obj.object_property
+                class_name = obj.object_property.lower()
+                
+                # Filter for people and vehicles
+                if class_name not in self.people_classes and class_name not in self.vehicle_classes:
+                    continue
                 
                 # Get bounding box
                 rect = obj.rectangle
