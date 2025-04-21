@@ -70,187 +70,142 @@ class Database:
             return
             
         try:
-            # Create metrics table
+            # Create latency_metrics table
             self.cursor.execute("""
-                CREATE TABLE IF NOT EXISTS metrics (
-                    id SERIAL PRIMARY KEY,
-                    image_id VARCHAR(255),
-                    source VARCHAR(50),
-                    latency FLOAT,
-                    total_processing_time FLOAT,
-                    cost_image_processing FLOAT,
-                    cost_video_processing FLOAT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
+                CREATE TABLE IF NOT EXISTSlatency_metrics (
+                    pk INT GENERATED ALWAYS AS IDENTITY,
+                    date TIMESTAMP DEFAULT NOW(),
+                    video_id TEXT NOT NULL,
+                    frames INT NOT NULL,
+                    latency_azure_ms INT,
+                    latency_aws_ms INT,
+                    latency_gcp_ms INT,
+                    latency_edge_ms INT
+                );
             """)
             
-            # Create tracking results table
+            # Create processing_time_metrics results table
             self.cursor.execute("""
-                CREATE TABLE IF NOT EXISTS tracking_results (
-                    id SERIAL PRIMARY KEY,
-                    video_id VARCHAR(255),
-                    source VARCHAR(50),
-                    processing_time FLOAT,
-                    people_tracked INTEGER,
-                    vehicles_tracked INTEGER,
-                    tracking_data JSONB,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
+                CREATE TABLE IF NOT EXISTS processing_time_metrics (
+                    pk INT GENERATED ALWAYS AS IDENTITY,
+                    date TIMESTAMP DEFAULT NOW(),
+                    video_id TEXT NOT NULL,
+                    frames INT NOT NULL,
+                    pt_azure_sec INT,
+                    pt_aws_sec INT,
+                    pt_gcp_sec INT,
+                    pt_edge_sec INT
+                );
             """)
             
+            # Create fps_metrics results table
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS fps_metrics (
+                    pk INT GENERATED ALWAYS AS IDENTITY,
+                    date TIMESTAMP DEFAULT NOW(),
+                    video_id TEXT NOT NULL,
+                    frames INT NOT NULL,
+                    fps_azure INT,
+                    fps_aws INT,
+                    fps_gcp INT,
+                    fps_edge INT
+                );
+            """)
+
+            # Create count_vehicles results table
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS count_vehicles (
+                    pk INT GENERATED ALWAYS AS IDENTITY,
+                    date TIMESTAMP DEFAULT NOW(),
+                    video_id TEXT NOT NULL,
+                    frames INT NOT NULL,
+                    cv_azure INT,
+                    cv_aws INT,
+                    cv_gcp INT,
+                    cv_edge INT,
+                    cv_expected INT
+                );
+            """)
+
+            # Create count_people results table
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTScount_people (
+                    pk INT GENERATED ALWAYS AS IDENTITY,
+                    date TIMESTAMP DEFAULT NOW(),
+                    video_id TEXT NOT NULL,
+                    frames INT NOT NULL,
+                    cp_azure INT,
+                    cp_aws INT,
+                    cp_gcp INT,
+                    cp_edge INT,
+                    cp_expected INT
+                );
+            """)
+
+            # Create precision_recall results table
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS precision_recall (
+                    pk INT GENERATED ALWAYS AS IDENTITY,
+                    date TIMESTAMP DEFAULT NOW(),
+                    video_id TEXT NOT NULL,
+                    frames INT NOT NULL,
+                    precision_azure INT,
+                    precision_aws INT,
+                    precision_gcp INT,
+                    precision_edge INT,
+                    recall_azure INT,
+                    recall_aws INT,
+                    recall_gcp INT,
+                    recall_edge INT
+                );
+            """)
+            
+            # Create precision_recall results table
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cost_metrics (
+                pk INT GENERATED ALWAYS AS IDENTITY,
+                date TIMESTAMP DEFAULT NOW(),
+                video_id TEXT NOT NULL,
+                frames INT NOT NULL,
+                cost_azure INT,
+                cost_aws INT,
+                cost_gcp INT,
+                cost_edge INT
+            );
+            """)
             logger.info("Created database tables")
         except Exception as e:
             logger.error(f"Error creating tables: {str(e)}")
             self.db_enabled = False
     
-    def save_metrics(self, metrics_data):
+    def load_data(self, table_name: str, data: Dict[str, Union[int, float, str]]) -> None:
         """
-        Save metrics to database.
-        
+        Load data into the specified table.
+
         Args:
-            metrics_data: Dictionary with metrics data
+            table_name: Name of the table to insert into.
+            data: Dictionary containing column-value pairs.
+
+        Raises:
+            ValueError: If table_name or data is invalid.
         """
         if not self.db_enabled or self.cursor is None:
-            logger.debug("Skipping metrics storage as database is disabled")
+            logger.warning("Skipping data load as database is disabled or connection failed")
             return
-            
+
+        if not table_name or not isinstance(data, dict) or not data:
+            raise ValueError("Invalid table name or data")
+
         try:
-            # Extract fields
-            image_id = metrics_data.get('image_id', '')
-            source = metrics_data.get('source', 'unknown')
-            latency = metrics_data.get('latency', 0)
-            total_processing_time = metrics_data.get('total_processing_time', 0)
-            cost_image_processing = metrics_data.get('cost_image_processing', 0)
-            cost_video_processing = metrics_data.get('cost_video_processing', 0)
-            
-            # Insert into database
-            self.cursor.execute("""
-                INSERT INTO metrics (
-                    image_id, source, latency, total_processing_time, 
-                    cost_image_processing, cost_video_processing
-                ) VALUES (%s, %s, %s, %s, %s, %s)
-            """, (
-                image_id, source, latency, total_processing_time,
-                cost_image_processing, cost_video_processing
-            ))
-            
-            logger.debug(f"Saved metrics for {image_id}")
+            columns = ', '.join(data.keys())
+            placeholders = ', '.join(['%s'] * len(data))
+            values = list(data.values())
+
+            sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+            self.cursor.execute(sql, values)
+            logger.info(f"Data inserted into {table_name}")
         except Exception as e:
-            logger.error(f"Error saving metrics: {str(e)}")
-    
-    def save_tracking_results(self, tracking_data):
-        """
-        Save tracking results to database.
-        
-        Args:
-            tracking_data: Dictionary with tracking results
-        """
-        if not self.db_enabled or self.cursor is None:
-            logger.debug("Skipping tracking results storage as database is disabled")
-            return
-            
-        try:
-            # Extract fields
-            video_id = tracking_data.get('video_id', '')
-            source = tracking_data.get('source', 'unknown')
-            processing_time = tracking_data.get('processing_time', 0)
-            people_tracked = tracking_data.get('people_tracked', 0)
-            vehicles_tracked = tracking_data.get('vehicles_tracked', 0)
-            
-            # Convert tracking data to JSON string
-            tracking_json = json.dumps(tracking_data.get('tracking_data', {}))
-            
-            # Insert into database
-            self.cursor.execute("""
-                INSERT INTO tracking_results (
-                    video_id, source, processing_time, people_tracked,
-                    vehicles_tracked, tracking_data
-                ) VALUES (%s, %s, %s, %s, %s, %s::jsonb)
-            """, (
-                video_id, source, processing_time, people_tracked,
-                vehicles_tracked, tracking_json
-            ))
-            
-            logger.debug(f"Saved tracking results for {video_id}")
-        except Exception as e:
-            logger.error(f"Error saving tracking results: {str(e)}")
-    
-    def get_metrics(self, source=None, limit=10):
-        """
-        Get metrics from database.
-        
-        Args:
-            source: Filter by source
-            limit: Maximum number of results
-            
-        Returns:
-            List of metrics dictionaries
-        """
-        if not self.db_enabled or self.cursor is None:
-            logger.debug("Cannot get metrics as database is disabled")
-            return []
-            
-        try:
-            if source:
-                self.cursor.execute("""
-                    SELECT * FROM metrics WHERE source = %s
-                    ORDER BY created_at DESC LIMIT %s
-                """, (source, limit))
-            else:
-                self.cursor.execute("""
-                    SELECT * FROM metrics ORDER BY created_at DESC LIMIT %s
-                """, (limit,))
-            
-            columns = [desc[0] for desc in self.cursor.description]
-            results = []
-            
-            for row in self.cursor.fetchall():
-                results.append(dict(zip(columns, row)))
-            
-            return results
-        except Exception as e:
-            logger.error(f"Error getting metrics: {str(e)}")
-            return []
-    
-    def get_tracking_results(self, source=None, limit=10):
-        """
-        Get tracking results from database.
-        
-        Args:
-            source: Filter by source
-            limit: Maximum number of results
-            
-        Returns:
-            List of tracking results dictionaries
-        """
-        if not self.db_enabled or self.cursor is None:
-            logger.debug("Cannot get tracking results as database is disabled")
-            return []
-            
-        try:
-            if source:
-                self.cursor.execute("""
-                    SELECT * FROM tracking_results WHERE source = %s
-                    ORDER BY created_at DESC LIMIT %s
-                """, (source, limit))
-            else:
-                self.cursor.execute("""
-                    SELECT * FROM tracking_results ORDER BY created_at DESC LIMIT %s
-                """, (limit,))
-            
-            columns = [desc[0] for desc in self.cursor.description]
-            results = []
-            
-            for row in self.cursor.fetchall():
-                # Convert JSONB to dict
-                row_dict = dict(zip(columns, row))
-                row_dict['tracking_data'] = row_dict['tracking_data']
-                results.append(row_dict)
-            
-            return results
-        except Exception as e:
-            logger.error(f"Error getting tracking results: {str(e)}")
-            return []
+            logger.error(f"Error inserting data into {table_name}: {str(e)}")
     
     def close(self):
         """Close database connection."""

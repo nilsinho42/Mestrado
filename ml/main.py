@@ -4,25 +4,20 @@ Utilizes core components to implement the video processing pipeline.
 """
 
 import os
-import sys
-import time
 import argparse
 import logging
-import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
-import uuid
-from datetime import datetime
-import copy
-
+import glob
+from core.tracking import create_tracker, Detection
+from dataclasses import asdict
+import time
 # Load environment variables from root directory
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
 
 # Import core components
 from core import (
-    VideoProcessor, ImageAnalysisProcessor, VideoTrackingProcessor,
-    create_detector, create_tracker, create_storage_provider, create_cost_calculator
+    ImageAnalysisProcessor, create_detector, create_tracker, create_cost_calculator
 )
 from core.db_utils import Database
 
@@ -46,28 +41,17 @@ def get_detector_for_provider(provider: str):
     Returns:
         Detector instance or None if not found
     """
+    logger.info(f"Getting detector for provider: {provider}")
     # Convert provider name to standard form for lookup
-    if provider.lower() in ['local', 'yolo']:
-        lookup_key = 'local'
-    elif provider.lower() in ['aws', 'rekognition']:
-        lookup_key = 'aws'
-    elif provider.lower() in ['azure', 'vision']:
-        lookup_key = 'azure'
-    else:
-        lookup_key = provider.lower()
+    lookup_key = provider.lower()
+
+    logger.info(f"Lookup key for provider {provider}: {lookup_key}")
+    logger.info(f"Available detectors: {list(_detectors.keys())}")
     
     # Return from global dict if available
     if lookup_key in _detectors:
+        logger.info(f"Found detector for {lookup_key} in global registry")
         return _detectors[lookup_key]
-    
-    # Try to create a new detector if not found
-    try:
-        detector = create_detector(provider=lookup_key)
-        _detectors[lookup_key] = detector
-        return detector
-    except Exception as e:
-        logger.error(f"Failed to create detector for provider {provider}: {e}")
-        return None
 
 def setup_directories():
     """Set up the required directories."""
@@ -75,7 +59,6 @@ def setup_directories():
         "./data",
         "./data/object_detection",
         "./data/object_detection/images",
-        "./data/object_detection/tracks",
         "./data/results"
     ]
     
@@ -108,7 +91,6 @@ class VideoPipeline:
         
         # Initialize processors
         self.image_processor = ImageAnalysisProcessor(output_dir=str(self.output_dir))
-        self.tracking_processor = VideoTrackingProcessor(output_dir="./data/object_detection/tracks")
         
         # Initialize cost calculator
         self.cost_calculator = create_cost_calculator(config_path="cost_config.ini")
@@ -117,29 +99,27 @@ class VideoPipeline:
         self._initialize_detectors()
         
         # Initialize trackers
-        self._initialize_trackers()
-        
-        # Initialize storage providers
-        self._initialize_storage()
+        # self._initialize_trackers()
         
         logger.info("Video pipeline initialized successfully")
     
     def _initialize_detectors(self):
-        """Initialize detectors for each provider."""
+        """Initialize detectors for each provider with simplified approach."""
         global _detectors
         
-        # YOLOv11n detector for local processing
+        # Local detector based on YOLOv11n
         try:
-            yolo_detector = create_detector(
-                provider="yolo",
-                model_path="yolov11n.pt",
-                confidence_threshold=0.25
+            logger.info("Initializing local detector for image processing...")
+            local_detector = create_detector(
+                provider="local",
+                model_path="yolo11n.pt",
+                confidence_threshold=0.20  # Slightly lower threshold to detect more objects
             )
-            self.image_processor.register_detector("local", yolo_detector)
-            _detectors["local"] = yolo_detector  # Add to global dict
-            logger.info("YOLOv11n detector initialized for local processing")
+            self.image_processor.register_detector("local", local_detector)
+            _detectors["local"] = local_detector  # Add to global dict
+            logger.info("Local detector initialized for image processing")
         except Exception as e:
-            error_msg = f"Failed to initialize YOLOv11n detector: {e}"
+            error_msg = f"Failed to initialize local detector: {e}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
         
@@ -149,279 +129,235 @@ class VideoPipeline:
         _detectors["aws"] = aws_detector  # Add to global dict
         
         # Azure Vision detector
+        logger.info("Initializing Azure Vision detector...")
         azure_detector = create_detector(provider="azure")
         self.image_processor.register_detector("azure", azure_detector)
         _detectors["azure"] = azure_detector  # Add to global dict
+        logger.info("Azure Vision detector initialized")
         
-        # Add YOLOv11n detector specifically for Task B (tracking)
-        yolov11n_detector = create_detector(
-            provider="yolo",
-            model_path="yolov11n.pt",
-            confidence_threshold=0.25,
-            name="yolov11n"
-        )
-        _detectors["yolov11n"] = yolov11n_detector  # Add to global dict
-        
-        logger.info("Detectors initialized")
+        logger.info("All detectors initialized successfully")
     
-    def _initialize_trackers(self):
-        """Initialize trackers for each provider."""
-        # DeepSORT tracker with YOLOv11n detector
-        try:
-            local_tracker = create_tracker(
-                provider="deepsort",
-                model_path="yolov11n.pt",
-                max_age=30,
-                n_init=3
-            )
-            self.tracking_processor.register_tracker("local", local_tracker)
-            logger.info("DeepSORT tracker initialized with YOLOv11n")
-        except Exception as e:
-            error_msg = f"Failed to initialize DeepSORT tracker with YOLOv11n: {e}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+    # def _initialize_trackers(self):
+    #     """Initialize trackers for each provider."""
+    #     # DeepSORT tracker with dedicated tracking detector
+    #     try:
+    #         local_tracker = create_tracker(
+    #             max_age=30,
+    #             n_init=3
+    #         )
+    #         self.tracking_processor.register_tracker("local", local_tracker)
+    #         logger.info("DeepSORT tracker initialized for local processing")
+    #     except Exception as e:
+    #         error_msg = f"Failed to initialize DeepSORT tracker: {e}"
+    #         logger.error(error_msg)
+    #         raise RuntimeError(error_msg)
         
-        # AWS and Azure trackers use the same DeepSORT + YOLOv11n implementation
-        # rather than relying on cloud services
-        aws_tracker = local_tracker  # Reuse the same tracker
-        self.tracking_processor.register_tracker("aws", aws_tracker)
+    #     # AWS and Azure trackers use the same DeepSORT implementation
+    #     # rather than relying on cloud services
+    #     aws_tracker = local_tracker  # Reuse the same tracker
+    #     self.tracking_processor.register_tracker("aws", aws_tracker)
         
-        azure_tracker = local_tracker  # Reuse the same tracker
-        self.tracking_processor.register_tracker("azure", azure_tracker)
+    #     azure_tracker = local_tracker  # Reuse the same tracker
+    #     self.tracking_processor.register_tracker("azure", azure_tracker)
         
-        logger.info("Trackers initialized with DeepSORT + YOLOv11n")
+    #     logger.info("Trackers initialized successfully")
     
-    def _initialize_storage(self):
-        """Initialize storage providers - now just using local storage."""
-        # No longer need cloud storage since we're processing locally
-        logger.info("Using local storage only - cloud storage disabled")
     
-    def process_video(self, video_path: str) -> Dict[str, Any]:
-        """Process video through the pipeline.
-        
-        Args:
-            video_path: Path to the video file
-            
-        Returns:
-            Dictionary with processing results
+    def process_video(self, video_path, job_id, providers=['local', 'aws', 'azure']):
         """
-        logger.info(f"Processing video: {video_path}")
-        video_path = Path(video_path)
-        
-        if not video_path.exists():
-            logger.error(f"Video file not found: {video_path}")
-            return {'error': 'Video file not found'}
-        
-        # Set up required directories
-        setup_directories()
-        
-        # Generate a unique ID for this processing job
-        job_id = str(uuid.uuid4())
-        
-        try:
-            # Process Task A: Image Analysis with Object Detection
-            task_a_results = self._process_task_a(video_path)
-            
-            # Process Task B: Video Processing with Object Tracking
-            task_b_results = self._process_task_b(video_path)
-            
-            # Filter results to include only people and vehicles
-            filtered_task_a_results = self._filter_results(task_a_results)
-            filtered_task_b_results = self._filter_results(task_b_results)
-            
-            # Combine results
-            results = {
-                'job_id': job_id,
-                'video_path': str(video_path),
-                'task_a': filtered_task_a_results,
-                'task_b': filtered_task_b_results,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            # Make sure the results directory exists
-            os.makedirs("./data/results", exist_ok=True)
-            
-            # Save results to file with absolute path
-            result_file = os.path.abspath(os.path.join("./data/results", f"results_{video_path.stem}.json"))
-            
-            # Ensure the file is written
-            try:
-                with open(result_file, "w") as f:
-                    json.dump(results, f, indent=2)
-                
-                if os.path.exists(result_file):
-                    logger.info(f"Results saved to {result_file}")
-                else:
-                    logger.error(f"Failed to save results file at {result_file}")
-            except Exception as file_error:
-                logger.error(f"Error writing results file: {file_error}")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error processing video: {e}", exc_info=True)
-            return {'error': str(e), 'job_id': job_id}
-    
-    def _process_task_a(self, video_path: Path) -> Dict[str, Any]:
-        """Process Task A: Image Analysis with Object Detection.
+        Process a video using detection methods and return results.
         
         Args:
             video_path: Path to video file
+            providers: List of providers to use ['local', 'aws', 'azure']
             
         Returns:
-            Dictionary with Task A results
+            Dictionary with job ID, video path, and results from both tasks
         """
-        logger.info("Starting Task A: Image Analysis with Object Detection")
+        # Create output directory for this job
+        output_dir = os.path.join(self.output_dir, job_id)
+        os.makedirs(output_dir, exist_ok=True)
         
-        # Process video with image analysis processor
-        results = self.image_processor.process_video(
-            video_path=str(video_path),
-            fps_reduction_factor=5,  # Sample 1 out of every 5 frames
-            providers=["local", "aws", "azure"]
-        )
+        logger.info(f"Processing video {video_path} with providers: {providers}")
         
-        # Store metrics in database
-        self._store_task_a_metrics(results)
-        
-        logger.info("Task A processing completed")
-        return results
-    
-    def _process_task_b(self, video_path: Path) -> Dict[str, Any]:
-        """Process Task B: Video Processing with Object Tracking.
-        
-        Args:
-            video_path: Path to video file
-            
-        Returns:
-            Dictionary with Task B results
-        """
-        logger.info("Starting Task B: Video Processing with Object Tracking")
-        
-        # Process video with tracking processor
-        results = self.tracking_processor.process_video(
-            video_path=str(video_path),
-            providers=["local", "aws", "azure"]
-        )
-        
-        # Store metrics in database
-        self._store_task_b_metrics(results)
-        
-        logger.info("Task B processing completed")
-        return results
-    
-    def _store_task_a_metrics(self, results: Dict[str, Any]):
-        """Store Task A metrics in the database.
-        
-        Args:
-            results: Task A results dictionary
-        """
-        # For each provider, store metrics
-        for provider, provider_results in results.get('providers', {}).items():
-            metrics = provider_results.get('metrics', {})
-            
-            # Calculate cost
-            if provider == 'aws':
-                cost = self.cost_calculator.calculate_aws_cost(metrics)
-            elif provider == 'azure':
-                cost = self.cost_calculator.calculate_azure_cost(metrics)
-            else:
-                cost = self.cost_calculator.calculate_local_cost(metrics)
-            
-            # Save to database
-            self.db.save_metrics({
-                'image_id': results.get('video_info', {}).get('video_name', ''),
-                'source': provider,
-                'latency': metrics.get('avg_latency', 0),
-                'cost_image_processing': cost.get('total_cost', 0)
-            })
-    
-    def _store_task_b_metrics(self, results: Dict[str, Any]):
-        """Store Task B metrics in the database.
-        
-        Args:
-            results: Task B results dictionary
-        """
-        # For each provider, store metrics
-        for provider, provider_results in results.get('providers', {}).items():
-            processing_time = provider_results.get('processing_time', 0)
-            
-            # Store tracking results
-            self.db.save_tracking_results({
-                'video_id': results.get('video_name', ''),
-                'source': provider,
-                'processing_time': processing_time,
-                'people_tracked': provider_results.get('summary', {}).get('people_tracked', 0),
-                'vehicles_tracked': provider_results.get('summary', {}).get('vehicles_tracked', 0),
-                'tracking_data': provider_results
-            })
-            
-            # Save metrics
-            self.db.save_metrics({
-                'image_id': results.get('video_name', ''),
-                'source': provider,
-                'total_processing_time': processing_time,
-                'cost_video_processing': provider_results.get('cost', {}).get('total_cost', 0)
-            })
+        # Temporarily set the output directory for this job
+        original_output_dir = self.image_processor.output_dir
+        self.image_processor.output_dir = Path(output_dir)
 
-    def _filter_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Filter results to include only people and vehicles.
-        
-        Args:
-            results: Original results dictionary
+        try:
+            # Extract frames from video
+            video_info = self.image_processor.extract_frames(
+                video_path=video_path)
             
-        Returns:
-            Filtered results dictionary
-        """
-        if not results or not isinstance(results, dict):
-            return results
-        
-        # Define classes to keep
-        people_classes = ["person", "people", "human"]
-        vehicle_classes = ["car", "truck", "bus", "motorcycle", "bicycle", "vehicle"]
-        keep_classes = people_classes + vehicle_classes
-        
-        # Helper function to filter detections
-        def filter_detections(detections):
-            if not detections or not isinstance(detections, list):
-                return detections
-            
-            filtered = []
-            for detection in detections:
-                class_name = detection.get("detection_type", detection.get("class_name", "")).lower()
-                if any(cls in class_name for cls in keep_classes):
-                    filtered.append(detection)
-            return filtered
-        
-        # Make a deep copy of results to avoid modifying the original
-        filtered_results = copy.deepcopy(results)
-        
-        # Filter Task A results (image detection)
-        if "providers" in filtered_results:
-            for provider, provider_data in filtered_results["providers"].items():
-                if "results" in provider_data:
-                    for frame_result in provider_data["results"]:
-                        if "detections" in frame_result:
-                            frame_result["detections"] = filter_detections(frame_result["detections"])
-        
-        # Filter Task B results (video tracking)
-        if "providers" in filtered_results:
-            for provider, provider_data in filtered_results["providers"].items():
-                # Filter frame_results detections
-                if "frame_results" in provider_data:
-                    for frame_result in provider_data["frame_results"]:
-                        if "detections" in frame_result:
-                            frame_result["detections"] = filter_detections(frame_result["detections"])
+            # First look directly in the output directory
+            frame_paths = glob.glob(os.path.join(output_dir, "*.jpg"))
+            frame_paths.sort()  # Ensure order
+            if not frame_paths:
+                logger.warning(f"No frames found for video {video_path}")
+                return None
                 
-                # Filter tracks to only include people and vehicles
-                if "tracks" in provider_data:
-                    filtered_tracks = []
-                    for track in provider_data["tracks"]:
-                        class_name = track.get("class_name", "").lower()
-                        if any(cls in class_name for cls in keep_classes):
-                            filtered_tracks.append(track)
-                    provider_data["tracks"] = filtered_tracks
+        finally:
+            # Restore the original output directory
+            self.image_processor.output_dir = original_output_dir
         
-        return filtered_results
+        # Process frames with each requested provider
+        all_results = {}
+        latency_metrics = {'video_id': job_id, 'frames': len(frame_paths)}
+        processing_time_metrics = {'video_id': job_id, 'frames': len(frame_paths)} 
+        fps_metrics = {'video_id': job_id, 'frames': len(frame_paths)}
+        count_vehicles = {'video_id': job_id, 'frames': len(frame_paths)}
+        count_people = {'video_id': job_id, 'frames': len(frame_paths)}
+
+        for provider in providers:
+            tracker = create_tracker()
+            logger.info(f"Processing frames with {provider} provider")
+            processing_time = time.time()
+
+            # Process all frames with this detector
+            frame_results = []
+            
+            # Process each frame    
+            for frame_path in frame_paths:
+                # Extract frame number from path for tracking
+                frame_number = int(os.path.basename(frame_path).split('_')[-1].split('.')[0])
+                
+                # Process image using provider's detector
+                # try:
+                logger.info(f"Processing image {frame_path} with provider {provider}")
+                # Load image directly to verify it exists and can be loaded
+                
+                detections, latency = self.image_processor.process_image(
+                    image_path=frame_path,
+                    provider=provider
+                )
+                
+                if detections:
+                    detections = [Detection(**d, frame_number=frame_number) for d in detections]
+                    
+                # Add frame info to results
+                result = {
+                    'frame_path': frame_path,
+                    'frame_number': frame_number,
+                    'detections': [asdict(d) for d in detections],
+                    'latency': latency
+                }
+                
+                frame_results.append(result)
+                # except Exception as e:
+                    # logger.error(f"Error processing frame {frame_path} with {provider}: {e}")
+
+                # Using detections, run tracking
+                tracker.process_frame(detections)
+
+                
+            # Append results for this provider
+            all_results[provider] = {
+                'frame_results': frame_results,
+                'tracked_objects': tracker.get_results()  # Will be filled by tracking step
+            }
+            print(tracker.get_results())
+
+            # Calculate average latency for this provider
+            avg_latency = sum(f['latency'] for f in frame_results) / len(frame_results)
+            processing_time = time.time() - processing_time 
+
+            if provider == 'azure':
+                latency_metrics['latency_azure_ms'] = round(avg_latency*1000, 0)
+                processing_time_metrics['pt_azure_sec'] = round(processing_time, 0)
+                fps_metrics['fps_azure'] = round(len(frame_results)/processing_time, 0)
+            elif provider == 'aws':
+                latency_metrics['latency_aws_ms'] = round(avg_latency*1000, 0)
+                processing_time_metrics['pt_aws_sec'] = round(processing_time, 0)
+                fps_metrics['fps_aws'] = round(len(frame_results)/processing_time, 0)
+            elif provider == 'gcp':
+                latency_metrics['latency_gcp_ms'] = round(avg_latency*1000, 0)
+                processing_time_metrics['pt_gcp_sec'] = round(processing_time, 0)
+                fps_metrics['fps_gcp'] = round(len(frame_results)/processing_time, 0)
+            elif provider == 'local':
+                latency_metrics['latency_edge_ms'] = round(avg_latency*1000, 0)
+                processing_time_metrics['pt_edge_sec'] = round(processing_time, 0)
+                fps_metrics['fps_edge'] = round(len(frame_results)/processing_time, 0)
+        # Load results into postgres database
+        self.db.load_data(table_name="fps_metrics", data=all_results)
+
+        return all_results
+    
+    # def test_local_detector(self, image_path=None):
+    #     """
+    #     Test the local detector on a sample image.
+        
+    #     Args:
+    #         image_path: Path to test image, or None to generate a test image
+            
+    #     Returns:
+    #         Detection results
+    #     """
+    #     # Initialize detectors if needed
+    #     self._initialize_detectors()
+        
+    #     # Use provided image or create a blank test image with a square in it
+    #     if image_path and os.path.exists(image_path):
+    #         image = cv2.imread(image_path)
+    #         logger.info(f"Using test image: {image_path}")
+    #     else:
+    #         logger.info("Creating test image with rectangles (simulating objects)")
+    #         # Create a blank image
+    #         image = np.zeros((720, 1280, 3), dtype=np.uint8)
+            
+    #         # Draw rectangles of different colors (simulating objects)
+    #         # Green rectangle (potential person)
+    #         cv2.rectangle(image, (300, 200), (400, 500), (0, 255, 0), -1)
+    #         # Red rectangle (potential car)
+    #         cv2.rectangle(image, (700, 300), (900, 400), (0, 0, 255), -1)
+    #         # Blue rectangle
+    #         cv2.rectangle(image, (100, 100), (200, 200), (255, 0, 0), -1)
+            
+    #         # Save the test image
+    #         test_img_path = "test_image.jpg"
+    #         cv2.imwrite(test_img_path, image)
+    #         logger.info(f"Test image saved to: {test_img_path}")
+    #         image_path = test_img_path
+        
+    #     # Get the local detector
+    #     local_detector = _detectors.get("local")
+    #     if not local_detector:
+    #         logger.info("Local detector not found. Initializing...")
+    #         local_detector = create_detector(
+    #             provider="local",
+    #             model_path="yolo11n.pt",
+    #             confidence_threshold=0.10  # Very low threshold for testing
+    #         )
+        
+    #     logger.info(f"Running detection with confidence threshold: {local_detector.confidence_threshold}")
+        
+    #     # Process image with local detector
+    #     detections = local_detector.process_image(image)
+        
+    #     # Print detection results
+    #     logger.info(f"Found {len(detections)} detections:")
+    #     for i, detection in enumerate(detections):
+    #         logger.info(f"  Detection {i+1}: {detection['detection_type']} with confidence {detection['confidence']:.2f}")
+        
+    #     # Save a visualization of the detections
+    #     result_image = image.copy()
+    #     for detection in detections:
+    #         bbox = detection["bbox"]
+    #         x1, y1, x2, y2 = [int(coord) for coord in bbox]
+    #         label = f"{detection['detection_type']}: {detection['confidence']:.2f}"
+            
+    #         # Draw bounding box
+    #         cv2.rectangle(result_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            
+    #         # Draw label
+    #         font = cv2.FONT_HERSHEY_SIMPLEX
+    #         cv2.putText(result_image, label, (x1, y1 - 10), font, 0.5, (0, 255, 0), 2)
+        
+    #     # Save the result
+    #     result_path = "test_result.jpg"
+    #     cv2.imwrite(result_path, result_image)
+    #     logger.info(f"Saved detection visualization to: {result_path}")
+        
+    #     return detections
 
 def main():
     """Main entry point for video processing pipeline."""

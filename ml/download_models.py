@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # URLs for model downloads - primary sources
 MODEL_URLS = {
-    "yolov11n.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt"
+    "yolo11n.pt": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt"
 }
 
 def download_file(url, destination, max_retries=3):
@@ -107,28 +107,25 @@ def main():
     os.makedirs("data", exist_ok=True)
     
     # For YOLOv11n, try both direct download and ultralytics
-    model_path = ml_dir / "yolov11n.pt"
+    model_path = ml_dir / "yolo11n.pt"
     
     # Check if model already exists
     if model_path.exists():
         logger.info(f"Model YOLOv11n already exists at {model_path}")
         return
     
-    # First, try to download as yolo11n.pt (as it appears in the URL)
+    # Try direct download
     download_url = "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt"
-    temp_model_path = ml_dir / "yolo11n.pt"
     
     # Try direct download
-    download_success = download_file(download_url, temp_model_path)
+    download_success = download_file(download_url, model_path)
     
     if download_success:
-        # Rename to yolov11n.pt for application compatibility
-        os.rename(temp_model_path, model_path)
-        logger.info(f"Successfully downloaded and renamed model to {model_path}")
+        logger.info(f"Successfully downloaded model to {model_path}")
         return
     
     # If direct download failed, try ultralytics download
-    if download_via_ultralytics("yolov11n", model_path):
+    if download_via_ultralytics("yolo11n", model_path):
         logger.info(f"Successfully downloaded {model_path} via ultralytics")
         return
     
@@ -137,7 +134,7 @@ def main():
         "ERROR: Could not download YOLOv11n model. This model is required for the application to function.\n"
         "Please manually download the model from:\n"
         f"  {download_url}\n"
-        "and save it as yolov11n.pt in the following location:\n"
+        "and save it as yolo11n.pt in the following location:\n"
         f"  {os.path.abspath(model_path)}"
     )
     logger.error(error_message)

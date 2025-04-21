@@ -3,242 +3,178 @@ Model loading and inference functionality.
 Provides base classes and utilities for working with ML models.
 """
 
-import torch
 import numpy as np
-import time
 import logging
 import os
 import cv2
-from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional, Union
-from abc import ABC, abstractmethod
-from io import BytesIO
+from typing import List, Dict, Any
+from azure.ai.vision.imageanalysis.models import VisualFeatures
+logging.getLogger("azure").setLevel(logging.WARNING)
 
 # Import from our core package
-from .tracking import Detection
-
 logger = logging.getLogger(__name__)
 
-class ObjectDetector(ABC):
-    """Abstract base class for object detection models."""
+# class ObjectDetector(ABC):
+#     """Abstract base class for object detection models."""
     
-    def __init__(self, name: str = "base_detector"):
-        """
-        Initialize the detector.
+#     def __init__(self, name: str = "base_detector"):
+#         """
+#         Initialize the detector.
         
-        Args:
-            name: Detector name/identifier
-        """
-        self.name = name
-        logger.info(f"Initialized {self.name} detector")
+#         Args:
+#             name: Detector name/identifier
+#         """
+#         self.name = name
+#         logger.info(f"Initialized {self.name} detector")
     
-    @abstractmethod
-    def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
-        """
-        Detect objects in an image.
+#     @abstractmethod
+#     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
+#         """
+#         Detect objects in an image.
         
-        Args:
-            image: Image as numpy array
+#         Args:
+#             image: Image as numpy array
             
-        Returns:
-            List of detection dictionaries
-        """
-        pass
+#         Returns:
+#             List of detection dictionaries
+#         """
+#         pass
     
-    def process_image(self, image: np.ndarray, image_path: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Process an image and return detections.
+#     def process_image(self, image: np.ndarray) -> List[Dict[str, Any]]:
+#         """
+#         Process an image and return detections.
         
-        Args:
-            image: Image as numpy array
-            image_path: Optional path to the image file
+#         Args:
+#             image: Image as numpy array
+#             image_path: Optional path to the image file
             
-        Returns:
-            List of detection dictionaries
-        """
-        start_time = time.time()
+#         Returns:
+#             List of detection dictionaries
+#         """
+#         # Run detection
+#         detections = self.detect(image)
         
-        # Run detection
-        detections = self.detect(image)
+#         # Log results
+#         logger.debug(f"Processed image with {self.name}: " f"{len(detections)} detections.")
         
-        # Calculate metrics
-        latency = time.time() - start_time
-        
-        # Log results
-        if image_path:
-            logger.debug(f"Processed {image_path} with {self.name}: "
-                         f"{len(detections)} detections in {latency:.3f}s")
-        else:
-            logger.debug(f"Processed image with {self.name}: "
-                         f"{len(detections)} detections in {latency:.3f}s")
-        
-        return detections
+#         return detections
     
-    def process_video(self, video_path: str, return_frames: bool = False) -> Dict[str, Any]:
-        """
-        Process a video file frame by frame.
+    # TODO REVIEW
+    # def process_video(self, video_path: str, return_frames: bool = False) -> Dict[str, Any]:
+    #     """
+    #     Process a video file frame by frame.
         
-        Args:
-            video_path: Path to the video file
-            return_frames: Whether to return processed frames
+    #     Args:
+    #         video_path: Path to the video file
+    #         return_frames: Whether to return processed frames
             
-        Returns:
-            Dictionary with detection results
-        """
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise ValueError(f"Could not open video file: {video_path}")
+    #     Returns:
+    #         Dictionary with detection results
+    #     """
+    #     cap = cv2.VideoCapture(video_path)
+    #     if not cap.isOpened():
+    #         raise ValueError(f"Could not open video file: {video_path}")
         
-        # Get video properties
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    #     # Get video properties
+    #     fps = cap.get(cv2.CAP_PROP_FPS)
+    #     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    #     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    #     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        # Initialize results
-        detection_results = []
-        processed_frames = [] if return_frames else None
+    #     # Initialize results
+    #     detection_results = []
+    #     processed_frames = [] if return_frames else None
         
-        # Process frames
-        frame_number = 0
-        total_latency = 0
+    #     # Process frames
+    #     frame_number = 0
+    #     total_latency = 0
         
-        try:
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+    #     try:
+    #         while cap.isOpened():
+    #             ret, frame = cap.read()
+    #             if not ret:
+    #                 break
                 
-                # Process frame
-                frame_start_time = time.time()
-                frame_detections = self.detect(frame)
-                frame_latency = time.time() - frame_start_time
-                total_latency += frame_latency
+    #             # Process frame
+    #             frame_start_time = time.time()
+    #             frame_detections = self.detect(frame)
+    #             frame_latency = time.time() - frame_start_time
+    #             total_latency += frame_latency
                 
-                # Store results
-                for detection in frame_detections:
-                    detection_results.append({
-                        "frame_number": frame_number,
-                        **detection
-                    })
+    #             # Store results
+    #             for detection in frame_detections:
+    #                 detection_results.append({
+    #                     "frame_number": frame_number,
+    #                     **detection
+    #                 })
                 
-                # Store processed frame if requested
-                if return_frames:
-                    processed_frames.append(frame)
+    #             # Store processed frame if requested
+    #             if return_frames:
+    #                 processed_frames.append(frame)
                 
-                frame_number += 1
+    #             frame_number += 1
                 
-                # Log progress periodically
-                if frame_number % 10 == 0:
-                    logger.debug(f"Processed {frame_number}/{frame_count} frames")
+    #             # Log progress periodically
+    #             if frame_number % 10 == 0:
+    #                 logger.debug(f"Processed {frame_number}/{frame_count} frames")
         
-        finally:
-            cap.release()
+    #     finally:
+    #         cap.release()
         
-        # Calculate summary metrics
-        avg_latency = total_latency / frame_number if frame_number > 0 else 0
+    #     # Calculate summary metrics
+    #     avg_latency = total_latency / frame_number if frame_number > 0 else 0
         
-        # Return results
-        results = {
-            "video_path": video_path,
-            "detector": self.name,
-            "total_frames": frame_number,
-            "avg_latency": avg_latency,
-            "total_detections": len(detection_results),
-            "detections": detection_results,
-            "video_info": {
-                "fps": fps,
-                "frame_count": frame_count,
-                "width": width,
-                "height": height
-            }
-        }
+    #     # Return results
+    #     results = {
+    #         "video_path": video_path,
+    #         "detector": self.name,
+    #         "total_frames": frame_number,
+    #         "avg_latency": avg_latency,
+    #         "total_detections": len(detection_results),
+    #         "detections": detection_results,
+    #         "video_info": {
+    #             "fps": fps,
+    #             "frame_count": frame_count,
+    #             "width": width,
+    #             "height": height
+    #         }
+    #     }
         
-        if return_frames:
-            results["frames"] = processed_frames
+    #     if return_frames:
+    #         results["frames"] = processed_frames
         
-        return results
+    #     return results
 
 
-class YOLODetector(ObjectDetector):
-    """YOLO object detector implementation."""
+class YOLODetector():
+    """YOLO object detector implementation using Ultralytics API."""
     
-    def __init__(self, model_path: str = None, device: str = None, 
-                 confidence_threshold: float = 0.25, name: str = "yolo"):
+    def __init__(self, model_path: str = "yolo11n.pt", confidence_threshold: float = 0.25, name: str = "yolo"):
         """
-        Initialize YOLO detector.
+        Initialize YOLO detector with simplified approach.
         
         Args:
             model_path: Path to the YOLO model file (.pt)
-            device: Device to run on ('cuda' or 'cpu')
             confidence_threshold: Minimum confidence for detections
             name: Detector name
         """
-        super().__init__(name=name)
-        
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
+        self.people_classes = ['person', 'human', 'people', 'pedestrian', 'man', 'woman', 'child', 'baby']
+        self.vehicle_classes = ['car', 'vehicle', 'automobile', 'truck', 'van', 'bus', 'motorcycle', 'transportation', 'taxi', 'ambulance', 'police car']
         
-        # Determine device
-        if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            self.device = device
-        
-        self.model = self._load_model()
-        
-        # Define the classes we want to detect (COCO dataset)
-        # Only interested in people and vehicles
-        self.target_classes = {
-            0: 'person',        # person
-            2: 'car',           # car
-            3: 'motorcycle',    # motorcycle
-            5: 'bus',           # bus
-            7: 'truck'          # truck
-        }
-        
-        logger.info(f"Loaded YOLO model from {model_path} on {self.device}")
-    
-    def _load_model(self) -> Any:
-        """Load the YOLO model."""
+        # Load model directly using Ultralytics API
+        from ultralytics import YOLO
         try:
-            # Try to load locally without using torch.hub
-            from ultralytics import YOLO
-            
-            if self.model_path and os.path.exists(self.model_path):
-                # Load from file path
-                model = YOLO(self.model_path)
-                model_name = os.path.basename(self.model_path)
-                logger.info(f"Loaded YOLO model from {self.model_path} ({model_name})")
-            else:
-                # If no model path provided, check if we're loading for a specific task
-                if self.name == "yolov11n":
-                    # Only use YOLOv11n
-                    if os.path.exists("yolov11n.pt"):
-                        model = YOLO("yolov11n.pt")
-                        logger.info("Loaded YOLOv11n model for object tracking")
-                    else:
-                        error_msg = (
-                            "YOLOv11n model not found. This model is required for object tracking. "
-                            "Please run download_models.py first or manually download YOLOv11n.pt"
-                        )
-                        logger.error(error_msg)
-                        raise RuntimeError(error_msg)
-                else:
-                    # For other uses, require an explicit model path
-                    error_msg = "No model path specified and no default model available"
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-            
-            return model
-            
+            self.model = YOLO(self.model_path)
+            logger.info(f"Loaded YOLO model from {self.model_path}")
         except Exception as e:
             logger.error(f"Failed to load YOLO model: {e}")
             raise
-            
+    
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
         """
-        Detect objects in an image.
+        Detect objects in an image using YOLO model.
         
         Args:
             image: Image as numpy array
@@ -247,28 +183,48 @@ class YOLODetector(ObjectDetector):
             List of detection dictionaries
         """
         try:
-            # For YOLOv8 API
+            # Log image information
+            logger.debug(f"Processing image with shape {image.shape} using YOLO model")
+            
+            # Run inference with confidence threshold
             results = self.model(image, conf=self.confidence_threshold, verbose=False)
             detections = []
             
-            for result in results:
-                boxes = result.boxes
+            # Process the results directly
+            if len(results) > 0:
+                result = results[0]  # Get the first result
+                # Get frame dimensions for metadata
+                img_height, img_width = image.shape[:2]
                 
-                for i, box in enumerate(boxes):
+                # Check if any boxes were detected
+                if len(result.boxes) > 0:
+                    logger.debug(f"YOLO found {len(result.boxes)} objects in image")
+                else:
+                    logger.debug("YOLO found no objects in image")
+                
+                # Process each detection
+                for box in result.boxes:
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     conf = float(box.conf[0])
                     cls = int(box.cls[0])
                     class_name = result.names[cls]
+
+                    if class_name not in self.people_classes and class_name not in self.vehicle_classes:
+                        continue
                     
-                    # Only include target classes (people and vehicles)
-                    if cls in self.target_classes:
-                        detection = {
-                            "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                            "confidence": float(conf),
-                            "class_id": int(cls),
-                            "class_name": class_name
+                    logger.debug(f"Detected {class_name} with confidence {conf:.2f}")
+                    
+                    # Create detection with standardized format
+                    detection = {
+                        "class_name": class_name,
+                        "confidence": conf,
+                        "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                        "metadata": {
+                            "class_id": cls,
+                            "frame_size": [img_width, img_height]
                         }
-                        detections.append(detection)
+                    }
+                    detections.append(detection)
             
             return detections
             
@@ -277,7 +233,7 @@ class YOLODetector(ObjectDetector):
             return []
 
 
-class AWSRekognitionDetector(ObjectDetector):
+class AWSRekognitionDetector():
     """AWS Rekognition-based object detector."""
     
     def __init__(self, rekognition_client=None, confidence_threshold: float = 0.5, 
@@ -290,16 +246,10 @@ class AWSRekognitionDetector(ObjectDetector):
             confidence_threshold: Minimum confidence for detections
             name: Detector name
         """
-        super().__init__(name=name)
         self.rekognition_client = rekognition_client
         self.confidence_threshold = confidence_threshold
-        
-        # Define people and vehicle classes for filtering
-        self.people_classes = ['Person', 'Human', 'People', 'Pedestrian', 
-                              'Man', 'Woman', 'Child', 'Baby']
-        self.vehicle_classes = ['Car', 'Vehicle', 'Automobile', 'Truck', 
-                               'Van', 'Bus', 'Motorcycle', 'Transportation', 
-                               'Taxi', 'Ambulance', 'Police Car']
+        self.people_classes = ['Person', 'Human', 'People', 'Pedestrian', 'Man', 'Woman', 'Child', 'Baby']
+        self.vehicle_classes = ['Car', 'Vehicle', 'Automobile', 'Truck', 'Van', 'Bus', 'Motorcycle', 'Transportation', 'Taxi', 'Ambulance', 'Police Car']
         
         # Will be lazily initialized if needed
         if self.rekognition_client is None:
@@ -358,7 +308,7 @@ class AWSRekognitionDetector(ObjectDetector):
                         
                         # Add detection
                         detections.append({
-                            "detection_type": class_name,
+                            "class_name": class_name,
                             "confidence": confidence,
                             "bbox": [float(x1), float(y1), float(x2), float(y2)],
                             "metadata": {
@@ -374,32 +324,30 @@ class AWSRekognitionDetector(ObjectDetector):
             return []
 
 
-class AzureVisionDetector(ObjectDetector):
-    """Azure Computer Vision-based object detector."""
+class AzureVisionDetector():
+    """Azure Computer Vision 4.0-based object detector."""
     
     def __init__(self, vision_client=None, confidence_threshold: float = 0.5, 
                  name: str = "azure_vision"):
         """
-        Initialize Azure Vision detector.
+        Initialize Azure Vision detector using Computer Vision 4.0 API.
         
         Args:
             vision_client: Azure Computer Vision client
             confidence_threshold: Minimum confidence for detections
             name: Detector name
         """
-        super().__init__(name=name)
         self.vision_client = vision_client
         self.confidence_threshold = confidence_threshold
-        
-        # Define people and vehicle classes for filtering
         self.people_classes = ['person', 'people', 'man', 'woman', 'child']
         self.vehicle_classes = ['car', 'vehicle', 'truck', 'van', 'bus', 'motorcycle', 'bicycle']
-        
+
+
         # Will be lazily initialized if needed
         if self.vision_client is None:
             try:
-                from azure.cognitiveservices.vision.computervision import ComputerVisionClient
-                from msrest.authentication import CognitiveServicesCredentials
+                from azure.ai.vision.imageanalysis import ImageAnalysisClient
+                from azure.core.credentials import AzureKeyCredential
                 
                 azure_endpoint = os.getenv('AZURE_ENDPOINT')
                 azure_key = os.getenv('AZURE_KEY')
@@ -408,18 +356,19 @@ class AzureVisionDetector(ObjectDetector):
                     raise ValueError("Azure credentials not found. "
                                     "Set AZURE_ENDPOINT and AZURE_KEY environment variables.")
                 
-                self.vision_client = ComputerVisionClient(
+                self.vision_client = ImageAnalysisClient(
                     endpoint=azure_endpoint,
-                    credentials=CognitiveServicesCredentials(azure_key)
+                    credential=AzureKeyCredential(azure_key)
                 )
-                logger.info("Initialized Azure Vision client")
+
+                logger.info("Initialized Azure Vision 4.0 client")
             except Exception as e:
-                logger.error(f"Failed to initialize Azure Vision client: {str(e)}")
-                raise RuntimeError(f"Failed to initialize Azure Vision client: {str(e)}")
+                logger.error(f"Failed to initialize Azure Vision 4.0 client: {str(e)}")
+                raise RuntimeError(f"Failed to initialize Azure Vision 4.0 client: {str(e)}")
     
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
         """
-        Detect objects in an image using Azure Computer Vision.
+        Detect objects in an image using Azure Computer Vision 4.0.
         
         Args:
             image: Image as numpy array
@@ -431,44 +380,72 @@ class AzureVisionDetector(ObjectDetector):
             # Convert image to bytes
             _, img_bytes = cv2.imencode('.jpg', image)
             
-            # Create a BytesIO object that has a read method
-            image_stream = BytesIO(img_bytes.tobytes())
+            # Create a binary data object
+            import io
+            image_stream = io.BytesIO(img_bytes.tobytes())
             
-            # Call Azure API
-            response = self.vision_client.detect_objects_in_stream(image_stream)
-            
+            # Call Azure API - request object detection only
+            response = self.vision_client.analyze(
+                image_data=image_stream,
+                visual_features=[VisualFeatures.OBJECTS, VisualFeatures.PEOPLE],
+                language="en",
+                logging_enable=False
+            )
+
             # Extract detections
             detections = []
             img_width, img_height = image.shape[1], image.shape[0]
             
-            for obj in response.objects:
-                confidence = obj.confidence
-                if confidence < self.confidence_threshold:
-                    continue
-                
-                # Get object info
-                class_name = obj.object_property.lower()
-                
-                # Filter for people and vehicles
-                if class_name not in self.people_classes and class_name not in self.vehicle_classes:
-                    continue
-                
-                # Get bounding box
-                rect = obj.rectangle
-                x1 = rect.x
-                y1 = rect.y
-                x2 = rect.x + rect.w
-                y2 = rect.y + rect.h
-                
-                # Add detection
-                detections.append({
-                    "detection_type": class_name,
-                    "confidence": confidence,
-                    "bbox": [float(x1), float(y1), float(x2), float(y2)],
-                    "metadata": {
-                        "frame_size": [img_width, img_height]
-                    }
-                })
+            # Process object detections
+            if hasattr(response, 'objects'):
+                for obj in response.objects.list:
+                    # Get object info - take first tag if multiple exist
+                    if obj.tags and len(obj.tags) > 0:
+                        class_name = obj.tags[0].name.lower()
+                        confidence = obj.tags[0].confidence
+                    else:
+                        continue
+                    
+                    # Skip low confidence detections
+                    if confidence < self.confidence_threshold:
+                        continue
+                        
+                    # Filter for people and vehicles
+                    if class_name not in self.people_classes and class_name not in self.vehicle_classes:
+                        continue
+                    
+                    # Get bounding box
+                    bbox = obj.bounding_box
+                    
+                    # Add detection
+                    detections.append({
+                        "class_name": class_name,
+                        "confidence": confidence,
+                        "bbox": bbox,
+                        "metadata": {
+                            "frame_size": [img_width, img_height]
+                        }
+                    })
+            
+            # Process people detections if available
+            if hasattr(response, 'people'):
+                for person in response.people.list:
+                    # Skip low confidence detections
+                    if person.confidence < self.confidence_threshold:
+                        continue
+                    
+                    # Get bounding box
+                    bbox = person.bounding_box
+                    
+                    # Add detection
+                    detections.append({
+                        "class_name": "person",
+                        "confidence": person.confidence,
+                        "bbox": bbox,
+                        "metadata": {
+                            "frame_size": [img_width, img_height]
+                        }
+                    })
             
             return detections
             
@@ -478,7 +455,7 @@ class AzureVisionDetector(ObjectDetector):
 
 
 # Factory function to create detector based on provider
-def create_detector(provider: str, **kwargs) -> ObjectDetector:
+def create_detector(provider: str, **kwargs):
     """
     Create an appropriate detector based on the provider.
     
@@ -489,15 +466,11 @@ def create_detector(provider: str, **kwargs) -> ObjectDetector:
     Returns:
         An ObjectDetector instance
     """
-    if provider.lower() == 'local' or provider.lower() == 'yolo':
+    if provider.lower() in ['local']:
         return YOLODetector(**kwargs)
     
-    elif provider.lower() == 'aws' or provider.lower() == 'rekognition':
+    elif provider.lower() in ['aws']:
         return AWSRekognitionDetector(**kwargs)
-    
-    elif provider.lower() == 'azure' or provider.lower() == 'vision':
+        
+    elif provider.lower() in ['azure']:
         return AzureVisionDetector(**kwargs)
-    
-    else:
-        logger.warning(f"Unknown provider '{provider}'. Using default YOLO detector.")
-        return YOLODetector(**kwargs)

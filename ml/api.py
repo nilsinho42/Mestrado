@@ -15,11 +15,9 @@ import logging
 import time
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi.security import OAuth2PasswordBearer
-from starlette.datastructures import FormData
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
-import re
+import numpy as np
 
 from main import VideoPipeline
 
@@ -105,14 +103,8 @@ async def process_video_api(
     Process a video with API endpoint matching the backend expectations.
     Uses FastAPI's background tasks for async processing.
     """
-    # Use the exact processing_id from the frontend if provided, or generate a new one
-    if processing_id:
-        logger.info(f"Using processing ID from frontend: {processing_id}")
-    else:
-        # Generate a new ID in the same format the frontend expects (nanosecond timestamp)
-        processing_id = f"proc_{int(time.time() * 1000000000)}"
-        logger.info(f"Generated new processing ID: {processing_id}")
-    
+    logger.info(f"Using processing ID from frontend: {processing_id}")
+
     # Save uploaded file with processing ID in the name
     original_filename = video.filename
     file_extension = os.path.splitext(original_filename)[1]
@@ -159,18 +151,36 @@ async def _process_video_in_background(video_path: str, processing_id: str):
         
         # Process video
         logger.info(f"Starting video processing for {processing_id}")
-        results = pipeline.process_video(video_path)
+        results = pipeline.process_video(video_path, processing_id)
         
         # Add the processing ID to the results
         if isinstance(results, dict):
             results["processing_id"] = processing_id
+        
+        # Recursively convert numpy arrays to Python types for JSON serialization
+        def convert_numpy_to_python(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, dict):
+                return {k: convert_numpy_to_python(v) for k, v in obj.items()}
+            elif isinstance(obj, list) or isinstance(obj, tuple):
+                return [convert_numpy_to_python(item) for item in obj]
+            else:
+                return obj
+        
+        # Convert numpy arrays to lists for JSON serialization
+        serializable_results = convert_numpy_to_python(results)
         
         # Save results with a single, consistent filename
         result_path = Path("./data/results") / f"results_{processing_id}.json"
         Path("./data/results").mkdir(parents=True, exist_ok=True)
         
         with open(result_path, "w") as f:
-            json.dump(results, f, indent=2)
+            json.dump(serializable_results, f, indent=2)
         logger.info(f"Results saved to {result_path}")
         
         logger.info(f"Background processing completed for {processing_id}")
