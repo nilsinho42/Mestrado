@@ -37,10 +37,11 @@ func NewMLService(config MLServiceConfig) *MLService {
 }
 
 // UploadVideo uploads a video file to the ML service for processing
-func (s *MLService) UploadVideo(file *multipart.FileHeader) (string, error) {
+func (s *MLService) UploadVideo(file *multipart.FileHeader, expectedVehicles int, expectedPeople int) (string, error) {
 	// Create a unique processing ID
 	processingID := fmt.Sprintf("proc_%d", time.Now().UnixNano())
 	fmt.Printf("Starting video upload: %s, size: %d, processingID: %s\n", file.Filename, file.Size, processingID)
+	fmt.Printf("Expected vehicles: %d, Expected people: %d\n", expectedVehicles, expectedPeople)
 
 	// Save the file locally first
 	uploadDir := "uploads"
@@ -80,6 +81,19 @@ func (s *MLService) UploadVideo(file *multipart.FileHeader) (string, error) {
 		return "", fmt.Errorf("failed to add processing ID to form: %w", err)
 	}
 	fmt.Printf("Added processing_id to form: %s\n", processingID)
+
+	// Add expected vehicles and people counts
+	if err := writer.WriteField("expected_vehicles", fmt.Sprintf("%d", expectedVehicles)); err != nil {
+		fmt.Printf("Error adding expected vehicles to form: %v\n", err)
+		return "", fmt.Errorf("failed to add expected vehicles to form: %w", err)
+	}
+
+	if err := writer.WriteField("expected_people", fmt.Sprintf("%d", expectedPeople)); err != nil {
+		fmt.Printf("Error adding expected people to form: %v\n", err)
+		return "", fmt.Errorf("failed to add expected people to form: %w", err)
+	}
+
+	fmt.Printf("Added expected counts to form: vehicles=%d, people=%d\n", expectedVehicles, expectedPeople)
 
 	// Add the file to the form
 	src.Seek(0, 0) // Reset file position

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Button, Card, Typography, Space, Alert, Tabs, Spin, Progress, Statistic } from 'antd';
+import { Button, Card, Typography, Space, Alert, Tabs, Spin, Progress, Statistic, InputNumber } from 'antd';
 import { UploadOutlined, CheckCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { uploadVideo, getProcessingStatus } from '../../services/videoProcessing';
 import { ProcessingResult } from '../../types/video-processing';
@@ -17,6 +17,8 @@ const ComparisonPanel: React.FC = () => {
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [result, setResult] = useState<ProcessingResult | null>(null);
   const [isPolling, setIsPolling] = useState(false);
+  const [expectedVehicles, setExpectedVehicles] = useState<number>(0);
+  const [expectedPeople, setExpectedPeople] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -100,7 +102,7 @@ const ComparisonPanel: React.FC = () => {
     setError(null);
 
     try {
-      const uploadResult = await uploadVideo(selectedFile);
+      const uploadResult = await uploadVideo(selectedFile, expectedVehicles, expectedPeople);
       setProcessingId(uploadResult.processing_id);
       setResult(uploadResult);
     } catch (err) {
@@ -243,9 +245,38 @@ const ComparisonPanel: React.FC = () => {
           </Space>
         </div>
 
+        {/* Expected Counts */}
+        <div>
+          <Title level={4}>2. Expected Counts</Title>
+          <Space>
+            <div>
+              <Text>Expected Vehicles:</Text>
+              <InputNumber 
+                min={0} 
+                max={100} 
+                defaultValue={0} 
+                onChange={value => setExpectedVehicles(value ?? 0)}
+                disabled={isUploading || isPolling}
+                style={{ width: 120, marginLeft: 8 }}
+              />
+            </div>
+            <div>
+              <Text>Expected People:</Text>
+              <InputNumber 
+                min={0} 
+                max={100} 
+                defaultValue={0} 
+                onChange={value => setExpectedPeople(value ?? 0)}
+                disabled={isUploading || isPolling}
+                style={{ width: 120, marginLeft: 8 }}
+              />
+            </div>
+          </Space>
+        </div>
+
         {/* Start Processing */}
         <div>
-          <Title level={4}>2. Process Video</Title>
+          <Title level={4}>3. Process Video</Title>
           <Button 
             type="primary"
             onClick={startProcessing}
@@ -262,7 +293,7 @@ const ComparisonPanel: React.FC = () => {
         {/* Status Display */}
         {(processingId || error) && (
           <div>
-            <Title level={4}>3. Processing Status</Title>
+            <Title level={4}>4. Processing Status</Title>
             {error ? (
               <Alert
                 message="Error"
@@ -277,7 +308,7 @@ const ComparisonPanel: React.FC = () => {
         {/* Results Display */}
         {result && result.status === 'completed' && (
           <div>
-            <Title level={4}>4. Results</Title>
+            <Title level={4}>5. Results</Title>
             {renderResults()}
           </div>
         )}

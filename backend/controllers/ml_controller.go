@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nilsinho42/Mestrado/services"
@@ -39,8 +40,28 @@ func (c *MLController) UploadVideo(ctx *gin.Context) {
 		return
 	}
 
+	// Get expected counts from request, defaulting to 0
+	expectedVehicles := 0
+	expectedPeople := 0
+
+	expectedVehiclesStr := ctx.DefaultPostForm("expected_vehicles", "0")
+	if val, err := strconv.Atoi(expectedVehiclesStr); err == nil {
+		expectedVehicles = val
+	}
+
+	expectedPeopleStr := ctx.DefaultPostForm("expected_people", "0")
+	if val, err := strconv.Atoi(expectedPeopleStr); err == nil {
+		expectedPeople = val
+	}
+
+	c.logger.Info("Processing video upload",
+		zap.String("filename", file.Filename),
+		zap.Int64("size", file.Size),
+		zap.Int("expected_vehicles", expectedVehicles),
+		zap.Int("expected_people", expectedPeople))
+
 	// Process the video
-	processingID, err := c.mlService.UploadVideo(file)
+	processingID, err := c.mlService.UploadVideo(file, expectedVehicles, expectedPeople)
 	if err != nil {
 		c.logger.Error("Failed to process video", zap.Error(err))
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -48,9 +69,11 @@ func (c *MLController) UploadVideo(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusAccepted, gin.H{
-		"processing_id": processingID,
-		"status":        "processing",
-		"message":       "Video upload successful and processing has started",
+		"processing_id":     processingID,
+		"status":            "processing",
+		"message":           "Video upload successful and processing has started",
+		"expected_vehicles": expectedVehicles,
+		"expected_people":   expectedPeople,
 	})
 }
 

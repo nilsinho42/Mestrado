@@ -369,6 +369,7 @@ class AzureVisionDetector():
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
         """
         Detect objects in an image using Azure Computer Vision 4.0.
+        Handles rate limiting with controlled retry logic.
         
         Args:
             image: Image as numpy array
@@ -376,82 +377,241 @@ class AzureVisionDetector():
         Returns:
             List of detection dictionaries
         """
-        try:
-            # Convert image to bytes
-            _, img_bytes = cv2.imencode('.jpg', image)
-            
-            # Create a binary data object
-            import io
-            image_stream = io.BytesIO(img_bytes.tobytes())
-            
-            # Call Azure API - request object detection only
-            response = self.vision_client.analyze(
-                image_data=image_stream,
-                visual_features=[VisualFeatures.OBJECTS, VisualFeatures.PEOPLE],
-                language="en",
-                logging_enable=False
-            )
+        import time
+        from azure.core.exceptions import HttpResponseError
+        
+        max_retries = 1
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                # Convert image to bytes
+                _, img_bytes = cv2.imencode('.jpg', image)
+                
+                # Create a binary data object
+                import io
+                image_stream = io.BytesIO(img_bytes.tobytes())
+                
+                # Call Azure API - request object detection only
+                response = self.vision_client.analyze(
+                    image_data=image_stream,
+                    visual_features=[VisualFeatures.OBJECTS, VisualFeatures.PEOPLE],
+                    language="en",
+                    logging_enable=False
+                )
 
-            # Extract detections
-            detections = []
-            img_width, img_height = image.shape[1], image.shape[0]
-            
-            # Process object detections
-            if hasattr(response, 'objects'):
-                for obj in response.objects.list:
-                    # Get object info - take first tag if multiple exist
-                    if obj.tags and len(obj.tags) > 0:
-                        class_name = obj.tags[0].name.lower()
-                        confidence = obj.tags[0].confidence
-                    else:
-                        continue
-                    
-                    # Skip low confidence detections
-                    if confidence < self.confidence_threshold:
-                        continue
+                # Extract detections
+                detections = []
+                img_width, img_height = image.shape[1], image.shape[0]
+                
+                # Process object detections
+                if hasattr(response, 'objects'):
+                    for obj in response.objects.list:
+                        # Get object info - take first tag if multiple exist
+                        if obj.tags and len(obj.tags) > 0:
+                            class_name = obj.tags[0].name.lower()
+                            confidence = obj.tags[0].confidence
+                        else:
+                            continue
                         
-                    # Filter for people and vehicles
-                    if class_name not in self.people_classes and class_name not in self.vehicle_classes:
-                        continue
+                        # Skip low confidence detections
+                        if confidence < self.confidence_threshold:
+                            continue
+                            
+                        # Filter for people and vehicles
+                        if class_name not in self.people_classes and class_name not in self.vehicle_classes:
+                            continue
+                        
+                        # Get bounding box
+                        bbox = obj.bounding_box
+                        
+                        # Add detection
+                        detections.append({
+                            "class_name": class_name,
+                            "confidence": confidence,
+                            "bbox": bbox,
+                            "metadata": {
+                                "frame_size": [img_width, img_height]
+                            }
+                        })
+                
+                # Process people detections if available
+                if hasattr(response, 'people'):
+                    for person in response.people.list:
+                        # Skip low confidence detections
+                        if person.confidence < self.confidence_threshold:
+                            continue
+                        
+                        # Get bounding box
+                        bbox = person.bounding_box
+                        
+                        # Add detection
+                        detections.append({
+                            "class_name": "person",
+                            "confidence": person.confidence,
+                            "bbox": bbox,
+                            "metadata": {
+                                "frame_size": [img_width, img_height]
+                            }
+                        })
+                
+                return detections
+                
+            except HttpResponseError as e:
+                # Check if this is a rate limit error (HTTP 429)
+                if hasattr(e, 'status_code') and e.status_code == 429:
+                    # Extract retry-after value from response headers (default to 60 seconds)
+                    retry_after = 60
+                    if hasattr(e, 'response') and hasattr(e.response, 'headers'):
+                        retry_after_header = e.response.headers.get('Retry-After')
+                        if retry_after_header and retry_after_header.isdigit():
+                            retry_after = int(retry_after_header)
                     
-                    # Get bounding box
-                    bbox = obj.bounding_box
-                    
-                    # Add detection
-                    detections.append({
-                        "class_name": class_name,
-                        "confidence": confidence,
-                        "bbox": bbox,
-                        "metadata": {
-                            "frame_size": [img_width, img_height]
-                        }
-                    })
+                    if retry_count < max_retries:
+                        logger.info(f"Azure rate limit reached (429). Waiting {retry_after} seconds before retry.")
+                        # Wait before retrying
+                        time.sleep(retry_after)
+                        retry_count += 1
+                    else:
+                        logger.info(f"Azure rate limit reached (429). Max retries exhausted. Skipping frame.")
+                        return []
+                else:
+                    # Log other HTTP errors and return empty list
+                    logger.info(f"HTTP error during Azure Vision detection: {str(e)}")
+                    return []
+            except Exception as e:
+                # Log any other errors and return empty list
+                logger.info(f"Error during Azure Vision detection: {str(e)}")
+                return []
+
+
+class GCPVisionDetector():
+    """Google Cloud Vision API-based object detector."""
+    
+    def __init__(self, vision_client=None, confidence_threshold: float = 0.5, 
+                 name: str = "gcp_vision"):
+        """
+        Initialize Google Cloud Vision detector.
+        
+        Args:
+            vision_client: Google Cloud Vision client
+            confidence_threshold: Minimum confidence for detections
+            name: Detector name
+        """
+        self.vision_client = vision_client
+        self.confidence_threshold = confidence_threshold
+        self.people_classes = ['person', 'people', 'man', 'woman', 'child']
+        self.vehicle_classes = ['car', 'vehicle', 'truck', 'van', 'bus', 'motorcycle', 'bicycle']
+
+        # Will be lazily initialized if needed
+        if self.vision_client is None:
+            try:
+                import os
+                from google.cloud import vision
+                
+                # Check if credentials file exists
+                credentials_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+                if not credentials_path or not os.path.exists(credentials_path):
+                    raise ValueError("Google Cloud credentials not found. "
+                                     "Set GOOGLE_APPLICATION_CREDENTIALS environment variable.")
+                
+                # Initialize the client
+                self.vision_client = vision.ImageAnnotatorClient()
+                logger.info("Initialized Google Cloud Vision client")
+            except Exception as e:
+                logger.error(f"Failed to initialize Google Cloud Vision client: {str(e)}")
+                raise RuntimeError(f"Failed to initialize Google Cloud Vision client: {str(e)}")
+    
+    def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Detect objects in an image using Google Cloud Vision API.
+        Handles rate limiting with controlled retry logic.
+        
+        Args:
+            image: Image as numpy array
             
-            # Process people detections if available
-            if hasattr(response, 'people'):
-                for person in response.people.list:
-                    # Skip low confidence detections
-                    if person.confidence < self.confidence_threshold:
-                        continue
+        Returns:
+            List of detection dictionaries
+        """
+        import time
+        import io
+        
+        max_retries = 1
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                from google.cloud import vision
+                
+                # Convert image to bytes
+                _, img_bytes = cv2.imencode('.jpg', image)
+                
+                # Create Google Cloud Vision image
+                vision_image = vision.Image(content=img_bytes.tobytes())
+                
+                # Perform object localization
+                response = self.vision_client.object_localization(image=vision_image)
+                
+                # Extract detections
+                detections = []
+                img_width, img_height = image.shape[1], image.shape[0]
+                
+                # Check if the response has localized_object_annotations
+                if response.localized_object_annotations:
+                    for object_annotation in response.localized_object_annotations:
+                        # Get object info
+                        class_name = object_annotation.name.lower()
+                        confidence = object_annotation.score
+                        
+                        # Skip low confidence detections
+                        if confidence < self.confidence_threshold:
+                            continue
+                            
+                        # Filter for people and vehicles
+                        if class_name not in self.people_classes and class_name not in self.vehicle_classes:
+                            continue
+                        
+                        # GCP returns normalized vertices
+                        vertices = object_annotation.bounding_poly.normalized_vertices
+                        
+                        # Find min/max coordinates to create a box format [x1, y1, x2, y2]
+                        x_coords = [vertex.x for vertex in vertices]
+                        y_coords = [vertex.y for vertex in vertices]
+                        
+                        x1 = min(x_coords) * img_width
+                        y1 = min(y_coords) * img_height
+                        x2 = max(x_coords) * img_width
+                        y2 = max(y_coords) * img_height
+                        
+                        # Add detection
+                        detections.append({
+                            "class_name": class_name,
+                            "confidence": confidence,
+                            "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                            "metadata": {
+                                "frame_size": [img_width, img_height]
+                            }
+                        })
+                
+                return detections
+                
+            except Exception as e:
+                if "429" in str(e) or "RateLimit" in str(e):
+                    # Default retry after 2 seconds for GCP rate limiting
+                    retry_after = 2
                     
-                    # Get bounding box
-                    bbox = person.bounding_box
-                    
-                    # Add detection
-                    detections.append({
-                        "class_name": "person",
-                        "confidence": person.confidence,
-                        "bbox": bbox,
-                        "metadata": {
-                            "frame_size": [img_width, img_height]
-                        }
-                    })
-            
-            return detections
-            
-        except Exception as e:
-            logger.error(f"Error during Azure Vision detection: {str(e)}")
-            return []
+                    if retry_count < max_retries:
+                        logger.info(f"GCP rate limit reached. Waiting {retry_after} seconds before retry.")
+                        # Wait before retrying
+                        time.sleep(retry_after)
+                        retry_count += 1
+                    else:
+                        logger.info(f"GCP rate limit reached. Max retries exhausted. Skipping frame.")
+                        return []
+                else:
+                    # Log other errors and return empty list
+                    logger.error(f"Error during Google Cloud Vision detection: {str(e)}")
+                    return []
 
 
 # Factory function to create detector based on provider
@@ -460,7 +620,7 @@ def create_detector(provider: str, **kwargs):
     Create an appropriate detector based on the provider.
     
     Args:
-        provider: Provider name ('local', 'aws', 'azure')
+        provider: Provider name ('local', 'aws', 'azure', 'gcp')
         **kwargs: Additional configuration for the detector
     
     Returns:
@@ -474,3 +634,6 @@ def create_detector(provider: str, **kwargs):
         
     elif provider.lower() in ['azure']:
         return AzureVisionDetector(**kwargs)
+        
+    elif provider.lower() in ['gcp']:
+        return GCPVisionDetector(**kwargs)

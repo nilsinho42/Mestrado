@@ -97,13 +97,22 @@ def read_root():
 async def process_video_api(
     background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
-    processing_id: Optional[str] = Form(None)
+    processing_id: Optional[str] = Form(None),
+    expected_vehicles: int = Form(0),
+    expected_people: int = Form(0)
 ):
     """
     Process a video with API endpoint matching the backend expectations.
     Uses FastAPI's background tasks for async processing.
+    
+    Parameters:
+        - video: Uploaded video file
+        - processing_id: Optional ID for the processing job
+        - expected_vehicles: Expected number of vehicles in the video
+        - expected_people: Expected number of people in the video
     """
     logger.info(f"Using processing ID from frontend: {processing_id}")
+    logger.info(f"Expected vehicles: {expected_vehicles}, Expected people: {expected_people}")
 
     # Save uploaded file with processing ID in the name
     original_filename = video.filename
@@ -121,7 +130,13 @@ async def process_video_api(
     # Start processing in background
     try:
         # Add task to background queue with the exact ID as provided
-        background_tasks.add_task(_process_video_in_background, str(video_path), processing_id)
+        background_tasks.add_task(
+            _process_video_in_background, 
+            str(video_path), 
+            processing_id,
+            expected_vehicles,
+            expected_people
+        )
         logger.info(f"Added processing task for {processing_id} to background queue")
         
         # Return immediate response with the exact processing ID
@@ -131,35 +146,54 @@ async def process_video_api(
                 "message": "Video uploaded and scheduled for processing",
                 "video_path": str(video_path),
                 "processing_id": processing_id,
-                "status": "processing"
+                "status": "processing",
+                "expected_vehicles": expected_vehicles,
+                "expected_people": expected_people
             }
         )
     except Exception as e:
         logger.error(f"Error scheduling video processing: {e}")
         raise HTTPException(status_code=500, detail=f"Error scheduling video processing: {str(e)}")
 
-async def _process_video_in_background(video_path: str, processing_id: str):
+async def _process_video_in_background(
+    video_path: str, 
+    processing_id: str,
+    expected_vehicles: int = 0,
+    expected_people: int = 0
+):
     """
     Process video in background and save results.
     
     Args:
         video_path: Path to video file
         processing_id: Processing ID for this job (normalized format)
+        expected_vehicles: Expected number of vehicles in the video
+        expected_people: Expected number of people in the video
     """
     try:
         logger.info(f"Processing video in background: {video_path}, ID: {processing_id}")
+        logger.info(f"Expected vehicles: {expected_vehicles}, Expected people: {expected_people}")
         
         # Process video
         logger.info(f"Starting video processing for {processing_id}")
-        results = pipeline.process_video(video_path, processing_id)
+        results = pipeline.process_video(
+            video_path, 
+            processing_id,
+            expected_vehicles=expected_vehicles,
+            expected_people=expected_people
+        )
         
         # Add the processing ID to the results
         if isinstance(results, dict):
             results["processing_id"] = processing_id
+            results["expected_vehicles"] = expected_vehicles
+            results["expected_people"] = expected_people
         
         # Recursively convert numpy arrays to Python types for JSON serialization
         def convert_numpy_to_python(obj):
-            if isinstance(obj, np.ndarray):
+            if hasattr(obj, 'to_dict'):
+                return obj.to_dict()
+            elif isinstance(obj, np.ndarray):
                 return obj.tolist()
             elif isinstance(obj, np.integer):
                 return int(obj)
@@ -167,14 +201,16 @@ async def _process_video_in_background(video_path: str, processing_id: str):
                 return float(obj)
             elif isinstance(obj, dict):
                 return {k: convert_numpy_to_python(v) for k, v in obj.items()}
-            elif isinstance(obj, list) or isinstance(obj, tuple):
+            elif isinstance(obj, (list, tuple)):
                 return [convert_numpy_to_python(item) for item in obj]
             else:
-                return obj
-        
+                return str(obj)
+            
         # Convert numpy arrays to lists for JSON serialization
         serializable_results = convert_numpy_to_python(results)
-        
+        logger.info(f"Results:")
+        logger.info(repr(serializable_results))
+
         # Save results with a single, consistent filename
         result_path = Path("./data/results") / f"results_{processing_id}.json"
         Path("./data/results").mkdir(parents=True, exist_ok=True)
@@ -390,7 +426,9 @@ def get_metrics_by_source(source: str):
 async def process_video(
     background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
-    processing_id: Optional[str] = Form(None)
+    processing_id: Optional[str] = Form(None),
+    expected_vehicles: int = Form(0),
+    expected_people: int = Form(0)
 ):
     """
     Upload and process a video.
@@ -400,6 +438,12 @@ async def process_video(
     - Task A: Image Analysis with Object Detection
     - Task B: Video Processing with Object Tracking
     
+    Parameters:
+        - video: Uploaded video file
+        - processing_id: Optional ID for the processing job
+        - expected_vehicles: Expected number of vehicles in the video
+        - expected_people: Expected number of people in the video
+        
     Uses background tasks to avoid blocking the server.
     """
     # Use the exact processing_id from the frontend if provided, or generate a new one
@@ -409,6 +453,8 @@ async def process_video(
         # Generate a new ID in the same format the frontend expects (nanosecond timestamp)
         processing_id = f"proc_{int(time.time() * 1000000000)}"
         logger.info(f"Generated new processing ID: {processing_id}")
+    
+    logger.info(f"Expected vehicles: {expected_vehicles}, Expected people: {expected_people}")
     
     # Save uploaded file with processing ID in the name
     original_filename = video.filename
@@ -426,7 +472,13 @@ async def process_video(
     # Start processing in background
     try:
         # Add task to background queue with the exact ID as provided
-        background_tasks.add_task(_process_video_in_background, str(video_path), processing_id)
+        background_tasks.add_task(
+            _process_video_in_background, 
+            str(video_path), 
+            processing_id,
+            expected_vehicles,
+            expected_people
+        )
         logger.info(f"Added processing task for {processing_id} to background queue")
         
         # Return immediate response with the exact processing ID
@@ -436,7 +488,9 @@ async def process_video(
                 "message": "Video uploaded and scheduled for processing",
                 "video_path": str(video_path),
                 "processing_id": processing_id,
-                "status": "processing"
+                "status": "processing",
+                "expected_vehicles": expected_vehicles,
+                "expected_people": expected_people
             }
         )
     except Exception as e:

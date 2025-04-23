@@ -14,7 +14,7 @@ class Database:
     """Database utility for storing metrics and tracking results."""
     
     def __init__(self, host=None, port=None, dbname=None, user=None, password=None,
-                db_url=None, disable_db=False):
+                db_url=None):
         """
         Initialize database connection.
         
@@ -25,15 +25,9 @@ class Database:
             user: Database user
             password: Database password
             db_url: Database URL (alternative to separate parameters)
-            disable_db: If True, disable database functionality
         """
         self.conn = None
         self.cursor = None
-        self.db_enabled = not disable_db
-        
-        if disable_db:
-            logger.info("Database functionality is disabled")
-            return
         
         # Try to connect to database
         try:
@@ -61,18 +55,17 @@ class Database:
         except Exception as e:
             logger.error(f"Error connecting to database: {str(e)}")
             logger.warning("Database functionality will be disabled")
-            self.db_enabled = False
     
     def create_tables(self):
         """Create required tables if they don't exist."""
-        if not self.db_enabled or self.cursor is None:
+        if self.cursor is None:
             logger.warning("Skipping table creation as database is disabled or connection failed")
             return
             
         try:
             # Create latency_metrics table
             self.cursor.execute("""
-                CREATE TABLE IF NOT EXISTSlatency_metrics (
+                CREATE TABLE IF NOT EXISTS latency_metrics (
                     pk INT GENERATED ALWAYS AS IDENTITY,
                     date TIMESTAMP DEFAULT NOW(),
                     video_id TEXT NOT NULL,
@@ -129,7 +122,7 @@ class Database:
 
             # Create count_people results table
             self.cursor.execute("""
-                CREATE TABLE IF NOT EXISTScount_people (
+                CREATE TABLE IF NOT EXISTS count_people (
                     pk INT GENERATED ALWAYS AS IDENTITY,
                     date TIMESTAMP DEFAULT NOW(),
                     video_id TEXT NOT NULL,
@@ -176,7 +169,6 @@ class Database:
             logger.info("Created database tables")
         except Exception as e:
             logger.error(f"Error creating tables: {str(e)}")
-            self.db_enabled = False
     
     def load_data(self, table_name: str, data: Dict[str, Union[int, float, str]]) -> None:
         """
@@ -189,9 +181,19 @@ class Database:
         Raises:
             ValueError: If table_name or data is invalid.
         """
-        if not self.db_enabled or self.cursor is None:
-            logger.warning("Skipping data load as database is disabled or connection failed")
-            return
+        if not self.cursor is None:
+            # Connect to database
+            self.conn = psycopg2.connect(
+                host=os.getenv("DB_HOST"),
+                port=os.getenv("DB_PORT"),
+                dbname=os.getenv("DB_NAME"),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD")
+            )
+            
+            self.conn.autocommit = True
+            self.cursor = self.conn.cursor()
+            logger.info("Connected to database")
 
         if not table_name or not isinstance(data, dict) or not data:
             raise ValueError("Invalid table name or data")

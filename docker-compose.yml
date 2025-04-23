@@ -43,6 +43,7 @@ services:
     volumes:
       - ./ml/uploads:/app/uploads
       - ./ml/data:/app/data
+      - ./cloud/gcp/dulcet-voyager-316217-6cc47874006d.json:/app/credentials/dulcet-voyager-316217-6cc47874006d.json
     environment:
       - PYTHONUNBUFFERED=1
     env_file:

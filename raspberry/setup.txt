@@ -1,0 +1,29 @@
+1. Go to: https://www.raspberrypi.com/software/
+2. Download for your OS (Windows, macOS, Ubuntu)
+3. Install and run the program
+4. Choose Raspberry Pi model 4
+5. Choose OS: Raspberry Pi OS Lite (64-bit)
+6. Edit Settings
+7. Create a user (ntp) and set the password
+8. Enable WIFI
+9. Enable SSH using user+password
+10. Wait for installation to complete
+11. Load the MicroSD to the Raspberry and turn it on
+12. Connect to the Raspberry using: ssh ntp@raspberrypi.local + password
+13. Install libraries needed for python processing:
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3 python3-pip python3-venv git
+14. Create the python virtual environment
+python3 -m venv ~/mestrado
+source ~/mestrado/bin/activate
+15. Install python libraries:
+pip install flask
+16. Install more libraries:
+sudo apt install -y libopenblas-dev libblas-dev m4 cmake cython3 python3-dev
+
+
+16. Clone code repository that has the code to run the webserver
+
+
+
+

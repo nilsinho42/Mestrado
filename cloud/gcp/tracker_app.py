@@ -25,7 +25,7 @@ TEMP_DIR = Path("./tmp")
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # Create FastAPI app
-app = FastAPI(title="AWS Fargate DeepSORT Tracking API", version="1.0.0")
+app = FastAPI(title="GCP Cloud Run DeepSORT Tracking API", version="1.0.0")
 
 # Add CORS middleware
 app.add_middleware(
@@ -200,16 +200,14 @@ class KalmanFilter:
     def __init__(self):
         ndim, dt = 4, 1.
         
-        # Create Kalman filter model matrices.
+        # Create Kalman filter model matrices
         self._motion_mat = np.eye(2 * ndim, 2 * ndim)
         for i in range(ndim):
             self._motion_mat[i, ndim + i] = dt
         
         self._update_mat = np.eye(ndim, 2 * ndim)
         
-        # Motion and observation uncertainty are chosen relative to the current
-        # state estimate. These weights control the amount of uncertainty in
-        # the model.
+        # Motion and observation uncertainty
         self._std_weight_position = 1. / 20
         self._std_weight_velocity = 1. / 160
 
@@ -248,12 +246,12 @@ class KalmanFilter:
         ]
         motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))
         
-        # x' = F·x
+        # Update mean & cov
         mean = np.dot(self._motion_mat, mean)
-        # P' = F·P·F' + Q
-        covariance = np.linalg.multi_dot((
-            self._motion_mat, covariance, self._motion_mat.T)) + motion_cov
-            
+        covariance = np.linalg.multi_dot([
+            self._motion_mat, covariance, self._motion_mat.T
+        ]) + motion_cov
+        
         return mean, covariance
 
     def project(self, mean, covariance):
@@ -266,67 +264,54 @@ class KalmanFilter:
         ]
         innovation_cov = np.diag(np.square(std))
         
-        # y = H·x
         mean = np.dot(self._update_mat, mean)
-        # S = H·P·H' + R
-        covariance = np.linalg.multi_dot((
-            self._update_mat, covariance, self._update_mat.T)) + innovation_cov
-            
-        return mean, covariance
+        covariance = np.linalg.multi_dot([
+            self._update_mat, covariance, self._update_mat.T
+        ])
+        
+        return mean, covariance + innovation_cov
 
     def update(self, mean, covariance, measurement):
         """Run Kalman filter correction step."""
         projected_mean, projected_cov = self.project(mean, covariance)
         
-        # Compute Kalman gain: K = PH'(S)^-1
-        chol_factor, lower = scipy.linalg.cho_factor(
-            projected_cov, lower=True, check_finite=False)
+        # Compute Kalman gain
+        chol_factor, lower = scipy.linalg.cho_factor(projected_cov, lower=True, check_finite=False)
         kalman_gain = scipy.linalg.cho_solve(
             (chol_factor, lower), np.dot(covariance, self._update_mat.T).T,
             check_finite=False).T
         
-        # y = z - Hx (innovation)
+        # Update state
         innovation = measurement - projected_mean
-        
-        # x' = x + Ky (new state)
         new_mean = mean + np.dot(kalman_gain, innovation)
+        new_covariance = covariance - np.linalg.multi_dot([
+            kalman_gain, projected_cov, kalman_gain.T
+        ])
         
-        # P' = P - KHP (new covariance)
-        new_covariance = covariance - np.linalg.multi_dot((
-            kalman_gain, projected_cov, kalman_gain.T))
-            
         return new_mean, new_covariance
 
-    def gating_distance(self, mean, covariance, measurements,
-                        only_position=False):
-        """Compute gating distance between state distribution and measurements.
-        
-        A suitable distance threshold can be obtained from `chi2inv95`. If
-        `only_position` is False, the chi-square distribution has 4 degrees of
-        freedom, otherwise 2.
-        """
+    def gating_distance(self, mean, covariance, measurements, only_position=False):
+        """Compute gating distance between state distribution and measurements."""
         mean, covariance = self.project(mean, covariance)
         if only_position:
             mean, covariance = mean[:2], covariance[:2, :2]
             measurements = measurements[:, :2]
-
-        d = measurements - mean
         
-        if len(d.shape) == 1:
+        d = measurements - mean
+        if len(measurements.shape) == 1:
             d = d.reshape(1, -1)
         
         cholesky_factor = np.linalg.cholesky(covariance)
-        z = scipy.linalg.solve_triangular(
-            cholesky_factor, d.T, lower=True, check_finite=False,
-            overwrite_b=True)
-        squared_maha = np.sum(z * z, axis=0)
-        return squared_maha
+        z = scipy.linalg.solve_triangular(cholesky_factor, d.T, lower=True, check_finite=False)
+        squared_mahal = np.sum(z * z, axis=0)
+        return squared_mahal
 
+# Import scipy for Kalman filter
 import scipy.linalg
 
 class Track:
     """
-    A track class for holding a single tracked object state.
+    A track for a single object being tracked.
     """
     def __init__(self, mean, covariance, track_id, class_id, class_name, confidence, n_init, max_age=30):
         self.mean = mean
@@ -338,53 +323,44 @@ class Track:
         self.hits = 1
         self.age = 1
         self.time_since_update = 0
-        self.state = 1  # tentative
         self._n_init = n_init
         self._max_age = max_age
+        self.state = 1  # 1=Tentative, 2=Confirmed, 3=Deleted
 
     def to_tlwh(self):
-        """Get current position in bounding box format `(top left x, top left y,
-        width, height)`.
-        """
+        """Get bounding box in (top left width height) format."""
         ret = self.mean[:4].copy()
         ret[2] *= ret[3]
         ret[:2] -= ret[2:] / 2
         return ret
 
     def to_tlbr(self):
-        """Get current position in bounding box format `(min x, min y, max x,
-        max y)`.
-        """
+        """Get bounding box in (top left bottom right) format."""
         ret = self.to_tlwh()
         ret[2:] = ret[:2] + ret[2:]
         return ret
 
     def predict(self, kf):
-        """Propagate the state distribution to the current time step using a
-        Kalman filter prediction step.
-        """
+        """Propagate the state distribution to the current time step."""
         self.mean, self.covariance = kf.predict(self.mean, self.covariance)
         self.age += 1
         self.time_since_update += 1
 
     def update(self, kf, detection):
-        """Perform Kalman filter measurement update step and update the feature
-        cache.
-        """
+        """Perform Kalman filter measurement update step."""
         self.mean, self.covariance = kf.update(
             self.mean, self.covariance, detection.to_xyah())
-        self.confidence = detection.confidence
         self.hits += 1
         self.time_since_update = 0
         if self.state == 1 and self.hits >= self._n_init:
-            self.state = 2  # confirmed
+            self.state = 2  # Confirmed
 
     def mark_missed(self):
         """Mark this track as missed (no association at the current time step)."""
         if self.state == 1:
-            self.state = 3  # deleted
+            self.state = 3  # Mark tentative tracks as deleted
         elif self.time_since_update > self._max_age:
-            self.state = 3  # deleted
+            self.state = 3  # Mark as deleted after max_age
 
     def is_tentative(self):
         """Returns True if this track is tentative (unconfirmed)."""
@@ -395,7 +371,7 @@ class Track:
         return self.state == 2
 
     def is_deleted(self):
-        """Returns True if this track is deleted."""
+        """Returns True if this track is dead and should be deleted."""
         return self.state == 3
 
 class Tracker:
@@ -446,38 +422,36 @@ class Tracker:
         for track in self.tracks:
             if not track.is_confirmed():
                 continue
+            # Any other track management logic can go here
 
     def _match(self, detections):
-        confirmed_tracks = [
-            i for i, t in enumerate(self.tracks) if t.is_confirmed()]
-        unconfirmed_tracks = [
-            i for i, t in enumerate(self.tracks) if not t.is_confirmed()]
-
-        # Associate confirmed tracks using IoU
+        """Match detections to tracks using IoU."""
+        confirmed_tracks = [i for i, t in enumerate(self.tracks) if t.is_confirmed()]
+        unconfirmed_tracks = [i for i, t in enumerate(self.tracks) if not t.is_confirmed()]
+        
+        # Associate confirmed tracks using IOU distance
         matches_a, unmatched_tracks_a, unmatched_detections = \
-            min_cost_matching(
-                iou_cost, self.max_iou_distance, self.tracks,
-                detections, confirmed_tracks)
-
-        # Associate remaining tracks (unconfirmed) with remaining detections
-        # using IoU
-        iou_track_candidates = unconfirmed_tracks
+            min_cost_matching(iou_cost, self.max_iou_distance, self.tracks,
+                             detections, confirmed_tracks)
+        
+        # Associate remaining tracks
+        iou_threshold = 0.5  # Lower threshold for unconfirmed tracks
         matches_b, unmatched_tracks_b, unmatched_detections = \
-            min_cost_matching(
-                iou_cost, self.max_iou_distance, self.tracks,
-                detections, iou_track_candidates, unmatched_detections)
-
+            min_cost_matching(iou_cost, iou_threshold, self.tracks,
+                             detections, unconfirmed_tracks, unmatched_detections)
+        
         matches = matches_a + matches_b
-        unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
+        unmatched_tracks = list(unmatched_tracks_a) + list(unmatched_tracks_b)
         
         return matches, unmatched_tracks, unmatched_detections
 
     def _initiate_track(self, detection):
+        """Initialize a new track from a detection."""
         mean, covariance = self.kf.initiate(detection.to_xyah())
-        self.tracks.append(Track(
-            mean, covariance, self._next_id, detection.class_id,
-            detection.class_name, detection.confidence, self.n_init, 
-            max_age=self.max_age))
+        track = Track(mean, covariance, self._next_id, detection.class_id, 
+                    detection.class_name, detection.confidence, 
+                    self.n_init, self.max_age)
+        self.tracks.append(track)
         self._next_id += 1
 
 # Initialize tracker
@@ -490,7 +464,7 @@ class ImageData(BaseModel):
     frame_idx: int
     detections: List[Dict[str, Any]]
     video_id: Optional[str] = None
-    
+
 class TrackingResult(BaseModel):
     video_id: Optional[str]
     frame_idx: int
@@ -502,125 +476,134 @@ tracking_sessions = {}
 
 @app.get("/")
 async def root():
-    return {"message": "AWS Fargate DeepSORT Tracking API"}
+    return {"message": "GCP Cloud Run DeepSORT Tracking API. Use /api/track endpoint for object tracking."}
 
 @app.post("/api/track", response_model=TrackingResult)
 async def track_objects(data: ImageData):
-    try:
-        start_time = time.time()
-        
-        # Create tracking session if it doesn't exist
-        video_id = data.video_id or str(uuid.uuid4())
-        if video_id not in tracking_sessions:
-            tracking_sessions[video_id] = {
-                "tracker": Tracker(max_iou_distance=0.7, max_age=30, n_init=3),
-                "frames_processed": 0,
-                "last_update": time.time()
-            }
-        
-        # Decode image from base64
-        try:
-            img_bytes = base64.b64decode(data.image)
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            if img is None:
-                raise ValueError("Could not decode image")
-                
-            # Save image temporarily for debugging (optional)
-            frame_path = TEMP_DIR / f"{video_id}_{data.frame_idx}.jpg"
-            cv2.imwrite(str(frame_path), img)
-        except Exception as e:
-            logger.error(f"Error decoding image: {e}")
-            raise HTTPException(status_code=400, detail=f"Invalid image format: {str(e)}")
-        
-        # Convert detections to the format expected by DeepSORT
-        deepsort_detections = []
-        for det in data.detections:
-            # Convert [x1, y1, x2, y2] to [x, y, width, height]
-            box = det['box']
-            tlwh = [box[0], box[1], box[2] - box[0], box[3] - box[1]]
-            
-            deepsort_detections.append(Detection(
-                tlwh=tlwh,
-                confidence=det['confidence'],
-                class_id=det['class_id'],
-                class_name=det['class_name']
-            ))
-        
-        # Update tracker with detections
-        session = tracking_sessions[video_id]
-        session_tracker = session["tracker"]
-        
-        # Predict step (propagate tracks state)
-        session_tracker.predict()
-        
-        # Update step (associate detections with tracks)
-        session_tracker.update(deepsort_detections)
-        
-        # Extract results
-        tracks = []
-        for track in session_tracker.tracks:
-            if not track.is_confirmed():
-                continue
-                
-            track_box = track.to_tlbr()  # [x1, y1, x2, y2] format
-            
-            tracks.append({
-                'track_id': track.track_id,
-                'class_id': track.class_id,
-                'class_name': track.class_name,
-                'box': track_box.tolist(),
-                'confidence': track.confidence
-            })
-        
-        session["frames_processed"] += 1
-        session["last_update"] = time.time()
-        
-        # Calculate processing time
-        processing_time = time.time() - start_time
-        
-        # Clean up old sessions (sessions inactive for more than 30 minutes)
-        current_time = time.time()
-        for vid in list(tracking_sessions.keys()):
-            if current_time - tracking_sessions[vid]["last_update"] > 1800:
-                del tracking_sessions[vid]
-        
-        # Return tracking results
-        return {
-            "video_id": video_id,
-            "frame_idx": data.frame_idx,
-            "tracks": tracks,
-            "processing_time": processing_time
+    """
+    Process detections and update tracks for a video frame.
+    Returns the updated tracks.
+    """
+    video_id = data.video_id or str(uuid.uuid4())
+    start_time = time.time()
+    
+    logger.info(f"Processing frame {data.frame_idx} for video {video_id}")
+    
+    # Store image data for debugging if needed
+    image_data = base64.b64decode(data.image)
+    frame_path = TEMP_DIR / f"{video_id}_{data.frame_idx}.jpg"
+    with open(frame_path, "wb") as f:
+        f.write(image_data)
+    
+    # Get or initialize tracker for this video
+    if video_id not in tracking_sessions:
+        tracking_sessions[video_id] = {
+            "tracker": Tracker(max_iou_distance=0.7, max_age=30, n_init=3),
+            "frames_processed": 0,
+            "last_frame_idx": -1,
+            "vehicle_count": 0,
+            "person_count": 0
         }
-    except Exception as e:
-        logger.error(f"Error tracking objects: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    
+    session = tracking_sessions[video_id]
+    
+    # Check for missing frames
+    if data.frame_idx > session["last_frame_idx"] + 1 and session["last_frame_idx"] != -1:
+        logger.warning(f"Missing frames detected. Last processed: {session['last_frame_idx']}, current: {data.frame_idx}")
+    
+    session["last_frame_idx"] = data.frame_idx
+    session["frames_processed"] += 1
+    
+    # Convert detections to the format needed by DeepSORT
+    detections = []
+    for det in data.detections:
+        # Convert box format from [x1, y1, x2, y2] to [x, y, w, h]
+        box = det['box']
+        if len(box) == 4:
+            x1, y1, x2, y2 = box
+            w, h = x2 - x1, y2 - y1
+            tlwh = np.array([x1, y1, w, h])
+        else:
+            # Handle box in [x, y, w, h] format
+            tlwh = np.array(box)
+        
+        confidence = det['confidence']
+        class_id = det.get('class_id', 0)
+        class_name = det.get('class_name', 'unknown')
+        
+        detections.append(Detection(tlwh, confidence, class_id, class_name))
+    
+    # Process with DeepSORT tracker
+    tracker_instance = session["tracker"]
+    tracker_instance.predict()
+    tracker_instance.update(detections)
+    
+    # Prepare result
+    tracks = []
+    for track in tracker_instance.tracks:
+        if not track.is_confirmed() or track.time_since_update > 0:
+            continue
+            
+        bbox = track.to_tlbr()
+        
+        # Count unique vehicles and people
+        if track.class_name.lower() in ['car', 'truck', 'bus', 'vehicle', 'automobile', 'van', 'motorcycle']:
+            session["vehicle_count"] += 1
+        elif track.class_name.lower() in ['person', 'pedestrian', 'human', 'man', 'woman', 'child']:
+            session["person_count"] += 1
+        
+        # Add track to result
+        tracks.append({
+            'track_id': str(track.track_id),
+            'bbox': bbox.tolist(),
+            'class_id': track.class_id,
+            'class_name': track.class_name,
+            'confidence': track.confidence
+        })
+    
+    # Calculate processing time
+    processing_time = time.time() - start_time
+    
+    # For debugging, log the number of tracks
+    logger.info(f"Frame {data.frame_idx}: found {len(tracks)} confirmed tracks in {processing_time:.3f}s")
+    
+    # Return tracking results
+    return TrackingResult(
+        video_id=video_id,
+        frame_idx=data.frame_idx,
+        tracks=tracks,
+        processing_time=processing_time
+    )
 
 @app.post("/api/reset/{video_id}")
 async def reset_tracking(video_id: str):
+    """Reset the tracking state for a video."""
     if video_id in tracking_sessions:
         del tracking_sessions[video_id]
-        return {"message": f"Tracking session {video_id} reset"}
-    else:
-        return {"message": f"No active tracking session for {video_id}"}
+        # Delete any saved frames
+        for frame_file in TEMP_DIR.glob(f"{video_id}_*.jpg"):
+            frame_file.unlink()
+        return {"status": "success", "message": f"Tracking state for video {video_id} has been reset"}
+    return {"status": "not_found", "message": f"No tracking session found for video {video_id}"}
 
 @app.get("/api/status/{video_id}")
 async def get_status(video_id: str):
+    """Get tracking session status for a video."""
     if video_id in tracking_sessions:
         session = tracking_sessions[video_id]
         return {
             "video_id": video_id,
             "frames_processed": session["frames_processed"],
-            "last_update": session["last_update"]
+            "last_frame_idx": session["last_frame_idx"],
+            "vehicle_count": session["vehicle_count"],
+            "person_count": session["person_count"]
         }
-    else:
-        raise HTTPException(status_code=404, detail=f"No active tracking session for {video_id}")
+    return {"status": "not_found", "message": f"No tracking session found for video {video_id}"}
 
 @app.get("/healthcheck")
 async def healthcheck():
-    return {"status": "healthy", "active_sessions": len(tracking_sessions)}
+    """Health check endpoint."""
+    return {"status": "ok", "version": "1.0.0"}
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8080"))
-    uvicorn.run("tracker_app:app", host="0.0.0.0", port=port, log_level="info") 
+    uvicorn.run("tracker_app:app", host="0.0.0.0", port=8080) 

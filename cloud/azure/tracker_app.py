@@ -1,7 +1,6 @@
 import os
 import time
 import uuid
-import json
 import logging
 import base64
 import numpy as np
@@ -12,9 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from pathlib import Path
-import sys
 from dotenv import load_dotenv
-import torch
 
 # Load environment variables from root directory
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env'))
@@ -45,7 +42,7 @@ class Detection:
     This class represents a bounding box detection in a single image.
     """
     def __init__(self, tlwh, confidence, class_id, class_name):
-        self.tlwh = np.asarray(tlwh, dtype=np.float)
+        self.tlwh = np.asarray(tlwh, dtype=np.float64)
         self.confidence = float(confidence)
         self.class_id = class_id
         self.class_name = class_name
@@ -405,7 +402,7 @@ class Tracker:
     """
     This is the DeepSORT tracker implementation.
     """
-    def __init__(self, max_iou_distance=0.7, max_age=70, n_init=3):
+    def __init__(self, max_iou_distance=0.7, max_age=70, n_init=2):
         self.max_iou_distance = max_iou_distance
         self.max_age = max_age
         self.n_init = n_init
@@ -485,7 +482,7 @@ class Tracker:
 
 # Initialize tracker
 # Real DeepSORT implementation
-tracker = Tracker(max_iou_distance=0.7, max_age=30, n_init=3)
+tracker = Tracker(max_iou_distance=0.7, max_age=30, n_init=2)
 
 # Models for API requests and responses
 class ImageData(BaseModel):
@@ -505,7 +502,7 @@ tracking_sessions = {}
 
 @app.get("/")
 async def root():
-    return {"message": "DeepSORT Tracking API"}
+    return {"message": "DeepSORT Tracking API v1.0.0"}
 
 @app.post("/api/track", response_model=TrackingResult)
 async def track_objects(data: ImageData):
@@ -516,7 +513,7 @@ async def track_objects(data: ImageData):
         video_id = data.video_id or str(uuid.uuid4())
         if video_id not in tracking_sessions:
             tracking_sessions[video_id] = {
-                "tracker": Tracker(max_iou_distance=0.7, max_age=30, n_init=3),
+                "tracker": Tracker(max_iou_distance=0.7, max_age=30, n_init=2),
                 "frames_processed": 0,
                 "last_update": time.time()
             }
@@ -542,7 +539,7 @@ async def track_objects(data: ImageData):
         for det in data.detections:
             # Convert [x1, y1, x2, y2] to [x, y, width, height]
             box = det['box']
-            tlwh = [box[0], box[1], box[2] - box[0], box[3] - box[1]]
+            tlwh = [box[0], box[1], box[2], box[3]]
             
             deepsort_detections.append(Detection(
                 tlwh=tlwh,

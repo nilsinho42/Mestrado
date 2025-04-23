@@ -7,3 +7,6 @@ docker push nperes/deepsort-tracker:latest
 docker build -t deepsort-tracker-aws:latest .
 docker tag deepsort-tracker-aws:latest nperes/deepsort-tracker-aws:latest
 docker push nperes/deepsort-tracker-aws:latest
+
+docker build -t nperes/gcp-deepsort-tracker:latest .
+docker push nperes/gcp-deepsort-tracker:latest

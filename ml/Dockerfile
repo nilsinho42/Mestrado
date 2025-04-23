@@ -26,7 +26,8 @@ COPY . .
 
 # Create necessary directories
 RUN mkdir -p uploads && chmod 777 uploads && \
-    mkdir -p data/results && chmod 777 data/results
+    mkdir -p data/results && chmod 777 data/results && \
+    mkdir -p credentials && chmod 755 credentials
 
 # Verify model exists after copying
 RUN if [ -f "yolo11n.pt" ]; then \
@@ -68,6 +69,14 @@ else\n\
     echo "ERROR: Failed to download model. Service cannot start."\n\
     exit 1\n\
   fi\n\
+fi\n\
+# Check for Google Cloud credentials\n\
+echo "Checking for Google Cloud credentials..."\n\
+if [ -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then\n\
+  echo "Found Google Cloud credentials at $GOOGLE_APPLICATION_CREDENTIALS"\n\
+else\n\
+  echo "WARNING: Google Cloud credentials not found at $GOOGLE_APPLICATION_CREDENTIALS!"\n\
+  echo "GCP Vision API functionality will not work."\n\
 fi\n\
 # Start the application\n\
 echo "Starting application..."\n\

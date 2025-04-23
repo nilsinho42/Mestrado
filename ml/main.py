@@ -11,6 +11,9 @@ import glob
 from core.tracking import create_tracker, Detection
 from dataclasses import asdict
 import time
+import requests
+import base64
+
 # Load environment variables from root directory
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
@@ -67,6 +70,48 @@ def setup_directories():
     
     logger.info("Created required directories")
 
+def convert_detection(detection: Detection, provider: str) -> dict:
+    """Convert our Detection object to the format expected by tracker_app"""
+
+    if provider == 'azure':
+        logger.info(f"Detection class: {detection.class_id} {detection.class_name}")
+        box_data = detection.bbox._data  # Extract the dict from ImageBoundingBox
+        result = {
+            'box': [box_data['x'], box_data['y'], box_data['w'], box_data['h']],
+            'confidence': detection.confidence,
+            'class_id': detection.class_id if detection.class_id is not None else 0,
+            'class_name': detection.class_name
+        }
+    else:  # aws, gcp, or edge
+        result = {
+            'box': detection.bbox,  # Already in [x1, y1, x2, y2] format
+            'confidence': detection.confidence,
+            'class_id': detection.class_id if detection.class_id is not None else 0,
+            'class_name': detection.class_name
+        }
+    return result
+
+def process_response(response: requests.Response, tracking_data: dict) -> dict:
+    """Process the response from the tracker_app."""
+    resp_data = response.json()
+
+    tracks = resp_data.get('tracks', [])
+    for track in tracks:
+        track_id = track.get('track_id')
+        class_name = track.get('class_name', '').lower()
+        
+        # Check if this is a vehicle
+        if 'car' in class_name or 'truck' in class_name or 'bus' in class_name or 'vehicle' in class_name:
+            if track_id not in tracking_data['tracked_ids']['vehicle']:
+                tracking_data['tracked_ids']['vehicle'].add(track_id)
+                tracking_data['vehicle_count'] += 1
+        elif 'person' in class_name or 'pedestrian' in class_name:
+            if track_id not in tracking_data['tracked_ids']['person']:
+                tracking_data['tracked_ids']['person'].add(track_id)
+                tracking_data['person_count'] += 1
+    
+    return tracking_data
+
 class VideoPipeline:
     def __init__(self, output_dir: str = "./data/object_detection/images"):
         """Initialize video processing pipeline.
@@ -87,7 +132,6 @@ class VideoPipeline:
             self.db.create_tables()
         except Exception as db_error:
             logger.warning(f"Failed to initialize database: {db_error}. Continuing without database.")
-            self.db = Database(disable_db=True)
         
         # Initialize processors
         self.image_processor = ImageAnalysisProcessor(output_dir=str(self.output_dir))
@@ -98,6 +142,11 @@ class VideoPipeline:
         # Initialize detectors
         self._initialize_detectors()
         
+        self.azure_deepsort_tracker = os.getenv("AZURE_DEEPSORT_ENDPOINT")
+        self.aws_deepsort_tracker = os.getenv("AWS_FARGATE_ENDPOINT")
+        self.gcp_deepsort_tracker = os.getenv("GCP_DEEPSORT_TRACKER")   
+        self.edge_deepsort_tracker = os.getenv("EDGE_DEEPSORT_ENDPOINT")
+
         # Initialize trackers
         # self._initialize_trackers()
         
@@ -135,6 +184,13 @@ class VideoPipeline:
         _detectors["azure"] = azure_detector  # Add to global dict
         logger.info("Azure Vision detector initialized")
         
+        # Google Cloud Vision detector
+        logger.info("Initializing Google Cloud Vision detector...")
+        gcp_detector = create_detector(provider="gcp")
+        self.image_processor.register_detector("gcp", gcp_detector)
+        _detectors["gcp"] = gcp_detector  # Add to global dict
+        logger.info("Google Cloud Vision detector initialized")
+        
         logger.info("All detectors initialized successfully")
     
     # def _initialize_trackers(self):
@@ -162,14 +218,18 @@ class VideoPipeline:
         
     #     logger.info("Trackers initialized successfully")
     
-    
-    def process_video(self, video_path, job_id, providers=['local', 'aws', 'azure']):
+
+
+    def process_video(self, video_path, job_id, providers=['local', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0):
         """
         Process a video using detection methods and return results.
         
         Args:
             video_path: Path to video file
+            job_id: Unique identifier for this processing job
             providers: List of providers to use ['local', 'aws', 'azure']
+            expected_vehicles: Expected number of vehicles in the video
+            expected_people: Expected number of people in the video
             
         Returns:
             Dictionary with job ID, video path, and results from both tasks
@@ -177,7 +237,7 @@ class VideoPipeline:
         # Create output directory for this job
         output_dir = os.path.join(self.output_dir, job_id)
         os.makedirs(output_dir, exist_ok=True)
-        
+        self.db = Database()
         logger.info(f"Processing video {video_path} with providers: {providers}")
         
         # Temporarily set the output directory for this job
@@ -205,8 +265,10 @@ class VideoPipeline:
         latency_metrics = {'video_id': job_id, 'frames': len(frame_paths)}
         processing_time_metrics = {'video_id': job_id, 'frames': len(frame_paths)} 
         fps_metrics = {'video_id': job_id, 'frames': len(frame_paths)}
-        count_vehicles = {'video_id': job_id, 'frames': len(frame_paths)}
-        count_people = {'video_id': job_id, 'frames': len(frame_paths)}
+        count_vehicles = {'video_id': job_id, 'frames': len(frame_paths), 'cv_expected': expected_vehicles}
+        count_people = {'video_id': job_id, 'frames': len(frame_paths), 'cp_expected': expected_people}
+        precision_recall = {'video_id': job_id, 'frames': len(frame_paths)}
+        cost_metrics = {'video_id': job_id, 'frames': len(frame_paths)}
 
         for provider in providers:
             tracker = create_tracker()
@@ -216,14 +278,21 @@ class VideoPipeline:
             # Process all frames with this detector
             frame_results = []
             
+            tracking_data = {
+                'vehicle_count': 0,  # Unique vehicles seen
+                'person_count': 0,   # Unique persons seen
+                'tracked_ids': {
+                    'vehicle': set(),  # Set of unique vehicle IDs
+                    'person': set()    # Set of unique person IDs
+                }
+            }
+
             # Process each frame    
             for frame_path in frame_paths:
                 # Extract frame number from path for tracking
                 frame_number = int(os.path.basename(frame_path).split('_')[-1].split('.')[0])
                 
                 # Process image using provider's detector
-                # try:
-                logger.info(f"Processing image {frame_path} with provider {provider}")
                 # Load image directly to verify it exists and can be loaded
                 
                 detections, latency = self.image_processor.process_image(
@@ -238,47 +307,197 @@ class VideoPipeline:
                 result = {
                     'frame_path': frame_path,
                     'frame_number': frame_number,
-                    'detections': [asdict(d) for d in detections],
                     'latency': latency
                 }
                 
                 frame_results.append(result)
-                # except Exception as e:
-                    # logger.error(f"Error processing frame {frame_path} with {provider}: {e}")
 
                 # Using detections, run tracking
-                tracker.process_frame(detections)
-
+                if provider == 'local':
+                    frame_result = tracker.process_frame(detections)
+                    # Store the response to help with debugging
+                    logger.info(f"Local tracking results for frame {frame_number}: {len(frame_result.get('tracks', []))} tracks")
+                elif provider == 'aws' and detections:
+                    # Read the image and convert to base64
+                    with open(frame_path, "rb") as image_file:
+                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                    
+                    # Create payload matching ImageData format
+                    payload = {
+                        "image": encoded_image,
+                        "frame_idx": frame_number,
+                        "detections": [convert_detection(det, provider) for det in detections],
+                        "video_id": job_id
+                    }
+                    
+                    # Send request to correct endpoint
+                    response = requests.post(f"{self.aws_deepsort_tracker}/api/track", json=payload)
+                    tracking_data = process_response(response, tracking_data)
+                    logger.info(response.json())
+                elif provider == 'azure' and detections:
+                    # Read the image and convert to base64
+                    with open(frame_path, "rb") as image_file:
+                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                    
+                    # Create payload matching ImageData format
+                    payload = {
+                        "image": encoded_image,
+                        "frame_idx": frame_number,
+                        "detections": [convert_detection(det, provider) for det in detections],
+                        "video_id": job_id
+                    }
+                    
+                    # Send request to correct endpoint
+                    logger.info(f"Sending request to {self.azure_deepsort_tracker}/api/track")
+                    response = requests.post(f"{self.azure_deepsort_tracker}/api/track", json=payload)
+                    tracking_data = process_response(response, tracking_data)
+                    logger.info(response.json())
+                elif provider == 'gcp' and detections:
+                    # Read the image and convert to base64
+                    with open(frame_path, "rb") as image_file:
+                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                    
+                    # Create payload matching ImageData format
+                    payload = {
+                        "image": encoded_image,
+                        "frame_idx": frame_number,
+                        "detections": [convert_detection(det, provider) for det in detections],
+                        "video_id": job_id
+                    }
+                    
+                    # Send request to correct endpoint
+                    logger.info(f"Sending request to {self.gcp_deepsort_tracker}/api/track")
+                    response = requests.post(f"{self.gcp_deepsort_tracker}/api/track", json=payload)
+                    tracking_data = process_response(response, tracking_data)
+                    logger.info(response.json())
+                elif provider == 'edge' and detections:
+                    # Read the image and convert to base64
+                    with open(frame_path, "rb") as image_file:
+                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                    
+                    # Create payload matching ImageData format
+                    payload = {
+                        "image": encoded_image,
+                        "frame_idx": frame_number,
+                        "detections": [convert_detection(det, provider) for det in detections],
+                        "video_id": job_id
+                    }
+                    
+                    # Send request to correct endpoint
+                    logger.info(f"Sending request to {self.edge_deepsort_tracker}/api/track")
+                    response = requests.post(f"{self.edge_deepsort_tracker}/api/track", json=payload)
+                    tracking_data = process_response(response, tracking_data)
+                    logger.info(response.json())
                 
+            if provider != 'local':
+                vehicle_count = tracking_data['vehicle_count']
+                person_count = tracking_data['person_count']
+            else:
+                tracking_results = tracker.get_results()
+                vehicle_count = tracking_results.get('counts', {}).get('vehicle_count', 0)
+                person_count = tracking_results.get('counts', {}).get('person_count', 0)
+
+            print(f"Provider {provider}: Detected {vehicle_count} vehicles and {person_count} people")
+
+            # Calculate accuracy if expected counts are provided
+            if vehicle_count > expected_vehicles:
+                true_positives = expected_vehicles
+                false_positives = vehicle_count - expected_vehicles
+                false_negatives = 0
+            else:
+                true_positives = vehicle_count
+                false_positives = 0
+                false_negatives = expected_vehicles - vehicle_count
+                
+            if expected_vehicles > 0:
+                vehicle_precision = true_positives / (true_positives + false_positives) if true_positives + false_positives > 0 else 0
+                vehicle_recall = true_positives / (true_positives + false_negatives) if true_positives + false_negatives > 0 else 0
+            else:
+                vehicle_precision = 0
+                vehicle_recall = 0
+            
+            if person_count > expected_people:
+                true_positives = expected_people
+                false_positives = person_count - expected_people
+                false_negatives = 0
+            else:
+                true_positives = person_count
+                false_positives = 0
+                false_negatives = expected_people - person_count
+
+            if expected_people > 0:
+                person_precision = true_positives / (true_positives + false_positives) if true_positives + false_positives > 0 else 0
+                person_recall = true_positives / (true_positives + false_negatives) if true_positives + false_negatives > 0 else 0
+            else:
+                person_precision = 0
+                person_recall = 0
+
             # Append results for this provider
             all_results[provider] = {
                 'frame_results': frame_results,
-                'tracked_objects': tracker.get_results()  # Will be filled by tracking step
+                'tracked_objects': vehicle_count + person_count,
+                'vehicle_count': vehicle_count,
+                'person_count': person_count
             }
-            print(tracker.get_results())
 
             # Calculate average latency for this provider
             avg_latency = sum(f['latency'] for f in frame_results) / len(frame_results)
             processing_time = time.time() - processing_time 
 
             if provider == 'azure':
-                latency_metrics['latency_azure_ms'] = round(avg_latency*1000, 0)
+                latency_metrics['latency_azure_ms'] = round(avg_latency*1000, 0)                
                 processing_time_metrics['pt_azure_sec'] = round(processing_time, 0)
                 fps_metrics['fps_azure'] = round(len(frame_results)/processing_time, 0)
+                count_vehicles['cv_azure'] = vehicle_count
+                count_people['cp_azure'] = person_count
+                precision_recall['precision_azure'] = round((vehicle_precision + person_precision)/2, 2)
+                precision_recall['recall_azure'] = round((vehicle_recall + person_recall)/2, 2)
+                # cost_metrics['cost_azure'] = round(self.cost_calculator.calculate_cost(provider), 2)
             elif provider == 'aws':
                 latency_metrics['latency_aws_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_aws_sec'] = round(processing_time, 0)
                 fps_metrics['fps_aws'] = round(len(frame_results)/processing_time, 0)
+                count_vehicles['cv_aws'] = vehicle_count
+                count_people['cp_aws'] = person_count
+                precision_recall['precision_aws'] = round((vehicle_precision + person_precision)/2, 2)
+                precision_recall['recall_aws'] = round((vehicle_recall + person_recall)/2, 2)
+                # cost_metrics['cost_aws'] = round(self.cost_calculator.calculate_cost(provider), 2)
             elif provider == 'gcp':
                 latency_metrics['latency_gcp_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_gcp_sec'] = round(processing_time, 0)
                 fps_metrics['fps_gcp'] = round(len(frame_results)/processing_time, 0)
-            elif provider == 'local':
+                count_vehicles['cv_gcp'] = vehicle_count
+                count_people['cp_gcp'] = person_count
+                precision_recall['precision_gcp'] = round((vehicle_precision + person_precision)/2, 2)
+                precision_recall['recall_gcp'] = round((vehicle_recall + person_recall)/2, 2)
+                # cost_metrics['cost_gcp'] = round(self.cost_calculator.calculate_cost(provider), 2)
+            elif provider == 'edge':
                 latency_metrics['latency_edge_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_edge_sec'] = round(processing_time, 0)
                 fps_metrics['fps_edge'] = round(len(frame_results)/processing_time, 0)
+                count_vehicles['cv_edge'] = vehicle_count
+                count_people['cp_edge'] = person_count
+                precision_recall['precision_edge'] = round((vehicle_precision + person_precision)/2, 2)
+                precision_recall['recall_edge'] = round((vehicle_recall + person_recall)/2, 2)
+                # cost_metrics['cost_edge'] = round(self.cost_calculator.calculate_cost(provider), 2)
+                    
+        # Add count data to the final results
+        all_results['metrics'] = {
+            'latency': latency_metrics,
+            'processing_time': processing_time_metrics,
+            'fps': fps_metrics,
+            'count_vehicles': count_vehicles,
+            'count_people': count_people
+        }
+        
         # Load results into postgres database
-        self.db.load_data(table_name="fps_metrics", data=all_results)
+        self.db.load_data(table_name="latency_metrics", data=latency_metrics)
+        self.db.load_data(table_name="processing_time_metrics", data=processing_time_metrics)
+        self.db.load_data(table_name="fps_metrics", data=fps_metrics)
+        self.db.load_data(table_name="count_vehicles", data=count_vehicles)
+        self.db.load_data(table_name="count_people", data=count_people)
+        self.db.load_data(table_name="precision_recall", data=precision_recall)
+        self.db.load_data(table_name="cost_metrics", data=cost_metrics)
 
         return all_results
     
@@ -364,13 +583,26 @@ def main():
     parser = argparse.ArgumentParser(description='Video Processing Pipeline')
     parser.add_argument('--video', type=str, required=True, help='Path to video file')
     parser.add_argument('--output', type=str, default='./data/object_detection/images', help='Output directory for frames')
+    parser.add_argument('--expected_vehicles', type=int, default=0, help='Expected number of vehicles in the video')
+    parser.add_argument('--expected_people', type=int, default=0, help='Expected number of people in the video')
+    parser.add_argument('--provider', type=str, default='local', choices=['local', 'aws', 'azure', 'gcp', 'edge'],
+                        help='Provider to use for detection and tracking')
     args = parser.parse_args()
     
     # Initialize pipeline
     pipeline = VideoPipeline(output_dir=args.output)
     
     # Process video
-    pipeline.process_video(args.video)
+    job_id = f"job_{int(time.time())}"  # Generate a unique job ID
+    results = pipeline.process_video(
+        args.video, 
+        job_id=job_id,
+        providers=[args.provider],
+        expected_vehicles=args.expected_vehicles,
+        expected_people=args.expected_people
+    )
+    
+    return results
 
 if __name__ == '__main__':
     main() 

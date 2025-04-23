@@ -4,12 +4,15 @@ import { ProcessingResult, MetricsResponse } from '../types/video-processing';
 /**
  * Uploads a video file and starts processing
  */
-export const uploadVideo = async (file: File): Promise<ProcessingResult> => {
+export const uploadVideo = async (file: File, expectedVehicles: number = 0, expectedPeople: number = 0): Promise<ProcessingResult> => {
   console.log('Starting video upload:', file.name, 'Size:', file.size);
+  console.log('Expected vehicles:', expectedVehicles, 'Expected people:', expectedPeople);
   
-  // Create a simple FormData with just the video file
+  // Create a simple FormData with just the video file and expected counts
   const formData = new FormData();
   formData.append('video', file);
+  formData.append('expected_vehicles', expectedVehicles.toString());
+  formData.append('expected_people', expectedPeople.toString());
   
   console.log('FormData created, sending request to:', '/api/videos/upload');
   

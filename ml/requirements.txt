@@ -31,4 +31,8 @@ boto3==1.29.0
 azure-storage-blob==12.19.0
 # New Azure Vision 4.0 package
 azure-ai-vision-imageanalysis==1.0.0
-azure-identity==1.14.1 
+azure-identity==1.14.1
+
+# Google Cloud dependencies
+google-cloud-vision==3.7.0
+google-cloud-storage==2.13.0 
