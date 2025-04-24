@@ -21,13 +21,13 @@ RUN pip install --no-cache-dir numpy==1.26.2 scipy==1.11.3 && \
     pip install --no-cache-dir lap==0.5.12 && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
-
 # Create necessary directories
 RUN mkdir -p uploads && chmod 777 uploads && \
     mkdir -p data/results && chmod 777 data/results && \
     mkdir -p credentials && chmod 755 credentials
+
+# Copy application code
+COPY . .
 
 # Verify model exists after copying
 RUN if [ -f "yolo11n.pt" ]; then \

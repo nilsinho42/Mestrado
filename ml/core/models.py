@@ -9,6 +9,9 @@ import os
 import cv2
 from typing import List, Dict, Any
 from azure.ai.vision.imageanalysis.models import VisualFeatures
+import requests
+import base64
+import time
 logging.getLogger("azure").setLevel(logging.WARNING)
 
 # Import from our core package
@@ -614,13 +617,123 @@ class GCPVisionDetector():
                     return []
 
 
+class EdgeDetector():
+    """Raspberry Pi edge server-based object detector."""
+    
+    def __init__(self, edge_endpoint: str = None, confidence_threshold: float = 0.5, 
+                 name: str = "edge_detector", verify_connection: bool = True):
+        """
+        Initialize Edge detector that makes requests to a Raspberry Pi server.
+        
+        Args:
+            edge_endpoint: URL endpoint for the edge server API
+            confidence_threshold: Minimum confidence for detections
+            name: Detector name
+            verify_connection: Whether to verify connection to the edge server on initialization
+        """
+        # Get the endpoint from environment variable if not provided
+        self.edge_endpoint = edge_endpoint or os.getenv("EDGE_DEEPSORT_ENDPOINT")
+        
+        if not self.edge_endpoint:
+            raise ValueError("Edge endpoint URL not provided. Set EDGE_DEEPSORT_ENDPOINT environment variable.")
+        
+        self.confidence_threshold = confidence_threshold
+        self.name = name
+        self.api_endpoint = f"{self.edge_endpoint.rstrip('/')}/api/detect"
+        self.max_retries = 3  # Add retry mechanism
+        
+        # Verify connectivity to edge server if requested
+        if verify_connection:
+            try:
+                response = requests.get(f"{self.edge_endpoint.rstrip('/')}/healthcheck", timeout=3)
+                if response.status_code == 200:
+                    logger.info(f"Successfully connected to edge server at {self.edge_endpoint}")
+                else:
+                    logger.warning(f"Edge server responded with status {response.status_code}")
+            except requests.exceptions.ConnectTimeout:
+                logger.warning(f"Connection to edge server at {self.edge_endpoint} timed out")
+            except requests.exceptions.ConnectionError:
+                logger.warning(f"Connection to edge server at {self.edge_endpoint} failed")
+            except Exception as e:
+                logger.warning(f"Failed to connect to edge server: {str(e)}")
+    
+    def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Detect objects in an image by making a request to the edge server.
+        Implements retry mechanism for intermittent connection issues.
+        
+        Args:
+            image: Image as numpy array
+            
+        Returns:
+            List of detection dictionaries
+        """
+        # Convert image to base64
+        _, img_bytes = cv2.imencode('.jpg', image)
+        encoded_image = base64.b64encode(img_bytes).decode('utf-8')
+        
+        # Create payload
+        payload = {
+            "image": encoded_image
+        }
+        
+        # Implement retry logic
+        for retry in range(self.max_retries):
+            try:
+                # Make request to edge server
+                if retry > 0:
+                    logger.info(f"Retry {retry}/{self.max_retries} for edge detection request")
+                    
+                logger.info(f"Sending detection request to edge server: {self.api_endpoint}")
+                start_time = time.time()
+                response = requests.post(self.api_endpoint, json=payload, timeout=10)
+                latency = time.time() - start_time
+                
+                # Check response
+                if response.status_code != 200:
+                    logger.error(f"Edge server returned status {response.status_code}: {response.text}")
+                    # Wait before retrying
+                    time.sleep(0.5)
+                    continue
+                
+                # Parse response
+                resp_data = response.json()
+                detections = resp_data.get("detections", [])
+                
+                # Filter by confidence threshold
+                filtered_detections = [
+                    d for d in detections 
+                    if d.get("confidence", 0) >= self.confidence_threshold
+                ]
+                
+                logger.info(f"Edge detection completed in {latency:.3f}s. Found {len(filtered_detections)} objects.")
+                return filtered_detections
+                
+            except requests.exceptions.ConnectTimeout:
+                logger.error(f"Connection to edge server at {self.api_endpoint} timed out (attempt {retry+1}/{self.max_retries})")
+                # Wait before retrying
+                time.sleep(0.5)  
+            except requests.exceptions.ConnectionError:
+                logger.error(f"Connection to edge server at {self.api_endpoint} failed (attempt {retry+1}/{self.max_retries})")
+                # Wait before retrying
+                time.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Error during edge detection: {str(e)} (attempt {retry+1}/{self.max_retries})")
+                # Wait before retrying
+                time.sleep(0.5)
+                
+        # All retries failed
+        logger.error(f"All {self.max_retries} attempts to connect to edge server failed")
+        return []
+
+
 # Factory function to create detector based on provider
 def create_detector(provider: str, **kwargs):
     """
     Create an appropriate detector based on the provider.
     
     Args:
-        provider: Provider name ('local', 'aws', 'azure', 'gcp')
+        provider: Provider name ('local', 'aws', 'azure', 'gcp', 'edge')
         **kwargs: Additional configuration for the detector
     
     Returns:
@@ -637,3 +750,6 @@ def create_detector(provider: str, **kwargs):
         
     elif provider.lower() in ['gcp']:
         return GCPVisionDetector(**kwargs)
+        
+    elif provider.lower() in ['edge']:
+        return EdgeDetector(**kwargs)

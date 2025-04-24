@@ -139,13 +139,14 @@ class VideoPipeline:
         # Initialize cost calculator
         self.cost_calculator = create_cost_calculator(config_path="cost_config.ini")
         
-        # Initialize detectors
-        self._initialize_detectors()
-        
+        # Set up tracker endpoints
         self.azure_deepsort_tracker = os.getenv("AZURE_DEEPSORT_ENDPOINT")
         self.aws_deepsort_tracker = os.getenv("AWS_FARGATE_ENDPOINT")
         self.gcp_deepsort_tracker = os.getenv("GCP_DEEPSORT_TRACKER")   
         self.edge_deepsort_tracker = os.getenv("EDGE_DEEPSORT_ENDPOINT")
+        
+        # Initialize detectors
+        self._initialize_detectors()
 
         # Initialize trackers
         # self._initialize_trackers()
@@ -191,6 +192,23 @@ class VideoPipeline:
         _detectors["gcp"] = gcp_detector  # Add to global dict
         logger.info("Google Cloud Vision detector initialized")
         
+        # Edge detector (Raspberry Pi)
+        try:
+            logger.info("Initializing Edge detector for Raspberry Pi processing...")
+            edge_detector = create_detector(
+                provider="edge",
+                edge_endpoint=self.edge_deepsort_tracker,
+                confidence_threshold=0.20,
+                verify_connection=False  # More robust, won't fail if Raspberry Pi is not available at startup
+            )
+            self.image_processor.register_detector("edge", edge_detector)
+            _detectors["edge"] = edge_detector  # Add to global dict
+            logger.info("Edge detector initialized for Raspberry Pi processing")
+        except Exception as e:
+            error_msg = f"Failed to initialize edge detector: {e}"
+            logger.error(error_msg)
+            logger.warning("Edge processing will not be available")
+        
         logger.info("All detectors initialized successfully")
     
     # def _initialize_trackers(self):
@@ -220,7 +238,7 @@ class VideoPipeline:
     
 
 
-    def process_video(self, video_path, job_id, providers=['local', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0):
+    def process_video(self, video_path, job_id, providers=['edge', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0):
         """
         Process a video using detection methods and return results.
         
@@ -384,10 +402,20 @@ class VideoPipeline:
                     }
                     
                     # Send request to correct endpoint
-                    logger.info(f"Sending request to {self.edge_deepsort_tracker}/api/track")
-                    response = requests.post(f"{self.edge_deepsort_tracker}/api/track", json=payload)
-                    tracking_data = process_response(response, tracking_data)
-                    logger.info(response.json())
+                    logger.info(f"Edge processing: Found {len(detections)} detections in frame {frame_number}")
+                    try:
+                        logger.info(f"Sending request to {self.edge_deepsort_tracker}/api/track")
+                        response = requests.post(f"{self.edge_deepsort_tracker}/api/track", json=payload, timeout=10)
+                        tracking_data = process_response(response, tracking_data)
+                        logger.info(f"Edge tracking successful: {response.json()}")
+                    except requests.exceptions.Timeout:
+                        logger.error(f"Edge tracking request timed out for frame {frame_number}")
+                    except requests.exceptions.ConnectionError as e:
+                        logger.error(f"Edge tracking connection error for frame {frame_number}: {str(e)}")
+                    except Exception as e:
+                        logger.error(f"Edge tracking error for frame {frame_number}: {str(e)}")
+                elif provider == 'edge' and not detections:
+                    logger.info(f"Edge processing: No detections found in frame {frame_number}, skipping tracking")
                 
             if provider != 'local':
                 vehicle_count = tracking_data['vehicle_count']
@@ -398,6 +426,9 @@ class VideoPipeline:
                 person_count = tracking_results.get('counts', {}).get('person_count', 0)
 
             print(f"Provider {provider}: Detected {vehicle_count} vehicles and {person_count} people")
+            # Calculate average latency for this provider
+            avg_latency = sum(f['latency'] for f in frame_results) / len(frame_results)
+            processing_time = time.time() - processing_time 
 
             # Calculate accuracy if expected counts are provided
             if vehicle_count > expected_vehicles:
@@ -440,45 +471,41 @@ class VideoPipeline:
                 'person_count': person_count
             }
 
-            # Calculate average latency for this provider
-            avg_latency = sum(f['latency'] for f in frame_results) / len(frame_results)
-            processing_time = time.time() - processing_time 
-
             if provider == 'azure':
                 latency_metrics['latency_azure_ms'] = round(avg_latency*1000, 0)                
                 processing_time_metrics['pt_azure_sec'] = round(processing_time, 0)
-                fps_metrics['fps_azure'] = round(len(frame_results)/processing_time, 0)
+                fps_metrics['fps_azure'] = round(len(frame_results)/processing_time, 1)
                 count_vehicles['cv_azure'] = vehicle_count
                 count_people['cp_azure'] = person_count
-                precision_recall['precision_azure'] = round((vehicle_precision + person_precision)/2, 2)
-                precision_recall['recall_azure'] = round((vehicle_recall + person_recall)/2, 2)
+                precision_recall['precision_azure'] = round((vehicle_precision + person_precision)/2, 2)*100
+                precision_recall['recall_azure'] = round((vehicle_recall + person_recall)/2, 2)*100
                 # cost_metrics['cost_azure'] = round(self.cost_calculator.calculate_cost(provider), 2)
             elif provider == 'aws':
                 latency_metrics['latency_aws_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_aws_sec'] = round(processing_time, 0)
-                fps_metrics['fps_aws'] = round(len(frame_results)/processing_time, 0)
+                fps_metrics['fps_aws'] = round(len(frame_results)/processing_time, 1)
                 count_vehicles['cv_aws'] = vehicle_count
                 count_people['cp_aws'] = person_count
-                precision_recall['precision_aws'] = round((vehicle_precision + person_precision)/2, 2)
-                precision_recall['recall_aws'] = round((vehicle_recall + person_recall)/2, 2)
+                precision_recall['precision_aws'] = round((vehicle_precision + person_precision)/2, 2)*100
+                precision_recall['recall_aws'] = round((vehicle_recall + person_recall)/2, 2)*100
                 # cost_metrics['cost_aws'] = round(self.cost_calculator.calculate_cost(provider), 2)
             elif provider == 'gcp':
                 latency_metrics['latency_gcp_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_gcp_sec'] = round(processing_time, 0)
-                fps_metrics['fps_gcp'] = round(len(frame_results)/processing_time, 0)
+                fps_metrics['fps_gcp'] = round(len(frame_results)/processing_time, 1)
                 count_vehicles['cv_gcp'] = vehicle_count
                 count_people['cp_gcp'] = person_count
-                precision_recall['precision_gcp'] = round((vehicle_precision + person_precision)/2, 2)
-                precision_recall['recall_gcp'] = round((vehicle_recall + person_recall)/2, 2)
+                precision_recall['precision_gcp'] = round((vehicle_precision + person_precision)/2, 2)*100
+                precision_recall['recall_gcp'] = round((vehicle_recall + person_recall)/2, 2)*100
                 # cost_metrics['cost_gcp'] = round(self.cost_calculator.calculate_cost(provider), 2)
             elif provider == 'edge':
                 latency_metrics['latency_edge_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_edge_sec'] = round(processing_time, 0)
-                fps_metrics['fps_edge'] = round(len(frame_results)/processing_time, 0)
+                fps_metrics['fps_edge'] = round(len(frame_results)/processing_time, 1)
                 count_vehicles['cv_edge'] = vehicle_count
                 count_people['cp_edge'] = person_count
-                precision_recall['precision_edge'] = round((vehicle_precision + person_precision)/2, 2)
-                precision_recall['recall_edge'] = round((vehicle_recall + person_recall)/2, 2)
+                precision_recall['precision_edge'] = round((vehicle_precision + person_precision)/2, 2)*100
+                precision_recall['recall_edge'] = round((vehicle_recall + person_recall)/2, 2)*100
                 # cost_metrics['cost_edge'] = round(self.cost_calculator.calculate_cost(provider), 2)
                     
         # Add count data to the final results

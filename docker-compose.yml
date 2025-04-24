@@ -43,9 +43,10 @@ services:
     volumes:
       - ./ml/uploads:/app/uploads
       - ./ml/data:/app/data
-      - ./cloud/gcp/dulcet-voyager-316217-6cc47874006d.json:/app/credentials/dulcet-voyager-316217-6cc47874006d.json
+      - ./cloud/gcp/dulcet-voyager-316217-4413d1f83430.json:/app/credentials/dulcet-voyager-316217-4413d1f83430.json
     environment:
       - PYTHONUNBUFFERED=1
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/dulcet-voyager-316217-4413d1f83430.json
     env_file:
       - .env
     networks:

@@ -23,6 +23,8 @@ class YOLODetector:
         self.model_path = model_path
         
         # Load class names
+        self.people_classes = ['person', 'human', 'people', 'pedestrian', 'man', 'woman', 'child', 'baby']
+        self.vehicle_classes = ['car', 'vehicle', 'automobile', 'truck', 'van', 'bus', 'motorcycle', 'transportation', 'taxi', 'ambulance', 'police car']
         self.class_names = self._load_class_names()
         
         # Initialize the model using Ultralytics API
@@ -85,6 +87,9 @@ class YOLODetector:
                     cls_id = int(box.cls[0])
                     cls_name = self.class_names[cls_id]
                     
+                    if cls_name not in self.people_classes and cls_name not in self.vehicle_classes:
+                        continue
+
                     # Add detection to results
                     detections.append({
                         'bbox': [float(x1), float(y1), float(x2), float(y2)],
