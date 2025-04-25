@@ -26,8 +26,17 @@ RUN mkdir -p uploads && chmod 777 uploads && \
     mkdir -p data/results && chmod 777 data/results && \
     mkdir -p credentials && chmod 755 credentials
 
-# Copy application code
+# Copy configuration files first to ensure they are present
+COPY cost_config_2.ini cost_config.ini /app/
+
+# Copy application code 
 COPY . .
+
+# Verify cost_config_2.ini exists
+RUN echo "Checking for cost config files:" && \
+    ls -la cost_config*.ini && \
+    echo "Contents of cost_config_2.ini:" && \
+    cat cost_config_2.ini
 
 # Verify model exists after copying
 RUN if [ -f "yolo11n.pt" ]; then \
@@ -45,6 +54,8 @@ echo "ML Service starting..."\n\
 echo "Current directory: $(pwd)"\n\
 echo "Listing files in current directory:"\n\
 ls -la\n\
+echo "Checking for config files:"\n\
+ls -la cost_config*.ini\n\
 echo "Checking for model file:"\n\
 if [ -f "yolo11n.pt" ]; then\n\
   echo "Found yolo11n.pt at $(pwd)/yolo11n.pt"\n\

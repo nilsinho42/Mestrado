@@ -13,6 +13,8 @@ from dataclasses import asdict
 import time
 import requests
 import base64
+import datetime
+from typing import Dict, Any
 
 # Load environment variables from root directory
 from dotenv import load_dotenv
@@ -137,7 +139,7 @@ class VideoPipeline:
         self.image_processor = ImageAnalysisProcessor(output_dir=str(self.output_dir))
         
         # Initialize cost calculator
-        self.cost_calculator = create_cost_calculator(config_path="cost_config.ini")
+        self.cost_calculator = create_cost_calculator(config_path="cost_config_2.ini")
         
         # Set up tracker endpoints
         self.azure_deepsort_tracker = os.getenv("AZURE_DEEPSORT_ENDPOINT")
@@ -238,7 +240,7 @@ class VideoPipeline:
     
 
 
-    def process_video(self, video_path, job_id, providers=['edge', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0):
+    def process_video(self, video_path, job_id, providers=['gcp'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp
         """
         Process a video using detection methods and return results.
         
@@ -306,6 +308,7 @@ class VideoPipeline:
             }
 
             # Process each frame    
+            cost_start_time = datetime.datetime.now(datetime.timezone.utc)
             for frame_path in frame_paths:
                 # Extract frame number from path for tracking
                 frame_number = int(os.path.basename(frame_path).split('_')[-1].split('.')[0])
@@ -330,6 +333,7 @@ class VideoPipeline:
                 
                 frame_results.append(result)
 
+                tracking_time = time.time()
                 # Using detections, run tracking
                 if provider == 'local':
                     frame_result = tracker.process_frame(detections)
@@ -429,6 +433,8 @@ class VideoPipeline:
             # Calculate average latency for this provider
             avg_latency = sum(f['latency'] for f in frame_results) / len(frame_results)
             processing_time = time.time() - processing_time 
+            tracking_time = time.time() - tracking_time
+            cost_end_time = datetime.datetime.now(datetime.timezone.utc)
 
             # Calculate accuracy if expected counts are provided
             if vehicle_count > expected_vehicles:
@@ -463,13 +469,6 @@ class VideoPipeline:
                 person_precision = 0
                 person_recall = 0
 
-            # Append results for this provider
-            all_results[provider] = {
-                'frame_results': frame_results,
-                'tracked_objects': vehicle_count + person_count,
-                'vehicle_count': vehicle_count,
-                'person_count': person_count
-            }
 
             if provider == 'azure':
                 latency_metrics['latency_azure_ms'] = round(avg_latency*1000, 0)                
@@ -479,7 +478,31 @@ class VideoPipeline:
                 count_people['cp_azure'] = person_count
                 precision_recall['precision_azure'] = round((vehicle_precision + person_precision)/2, 2)*100
                 precision_recall['recall_azure'] = round((vehicle_recall + person_recall)/2, 2)*100
-                # cost_metrics['cost_azure'] = round(self.cost_calculator.calculate_cost(provider), 2)
+                
+                from core.cost_calculator import get_azure_metrics
+                try:
+                    # Use environment variables for resource group
+                    
+                    logger.info(f"Querying Azure metrics from {cost_start_time.isoformat()} to {cost_end_time.isoformat()}")
+                    azure_metrics = get_azure_metrics(cost_start_time, cost_end_time)
+                    
+                    # Calculate cost using metrics
+                    cost_metrics['cost_azure'] = round(self.cost_calculator.calculate_cost(
+                        provider='azure',
+                        frame_count=len(frame_paths),
+                        cloud_metrics=azure_metrics
+                    ), 2)
+                    logger.info(f"Azure metrics collected successfully. Cost: {cost_metrics['cost_azure']}")
+                except Exception as e:
+                    error_msg = f"Failed to get Azure metrics: {str(e)}"
+                    logger.error(error_msg)
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    
+                    # No fallbacks - just set to zero and report the failure
+                    logger.error("Azure metrics collection failed with no fallback. Cost set to zero.")
+                    cost_metrics['cost_azure'] = 0.0
+                
             elif provider == 'aws':
                 latency_metrics['latency_aws_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_aws_sec'] = round(processing_time, 0)
@@ -488,7 +511,36 @@ class VideoPipeline:
                 count_people['cp_aws'] = person_count
                 precision_recall['precision_aws'] = round((vehicle_precision + person_precision)/2, 2)*100
                 precision_recall['recall_aws'] = round((vehicle_recall + person_recall)/2, 2)*100
-                # cost_metrics['cost_aws'] = round(self.cost_calculator.calculate_cost(provider), 2)
+                
+                # AWS metric collection
+                try:
+                    logger.info(f"Collecting AWS metrics for service {self.aws_deepsort_tracker} in cluster {self.aws_deepsort_tracker}")
+                    
+                    # Import the function directly
+                    from core.cost_calculator import get_aws_metrics
+                    
+                    logger.info(f"Querying AWS metrics from {cost_start_time.isoformat()} to {cost_end_time.isoformat()}")
+                    aws_metrics = get_aws_metrics(
+                        start_time=cost_start_time,
+                        end_time=cost_end_time
+                    )
+                    # This should not be calculating azure costs with aws metrics
+                    cost_metrics['cost_aws'] = round(self.cost_calculator.calculate_cost(
+                        provider='aws',
+                        frame_count=len(frame_paths),
+                        cloud_metrics=aws_metrics
+                    ), 2)
+                    logger.info(f"AWS metrics collected successfully. Cost: {cost_metrics['cost_aws']}")
+                except Exception as e:
+                    error_msg = f"Failed to collect AWS metrics: {str(e)}"
+                    logger.error(error_msg)
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    
+                    # No fallbacks - just set to zero and report the failure
+                    logger.error("AWS metrics collection failed with no fallback. Cost set to zero.")
+                    cost_metrics['cost_aws'] = 0.0
+                
             elif provider == 'gcp':
                 latency_metrics['latency_gcp_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_gcp_sec'] = round(processing_time, 0)
@@ -497,7 +549,46 @@ class VideoPipeline:
                 count_people['cp_gcp'] = person_count
                 precision_recall['precision_gcp'] = round((vehicle_precision + person_precision)/2, 2)*100
                 precision_recall['recall_gcp'] = round((vehicle_recall + person_recall)/2, 2)*100
-                # cost_metrics['cost_gcp'] = round(self.cost_calculator.calculate_cost(provider), 2)
+                
+                # Get GCP metrics for cost calculation
+                from core.cost_calculator import get_gcp_metrics
+                try:
+                    # Use environment variables for GCP resources
+                    project_id = os.getenv("GCP_PROJECT_ID", "video-processor")
+                    region = os.getenv("GCP_REGION", "us-central1")
+                    service_name = os.getenv("GCP_SERVICE_NAME", "gcp-deepsort-tracker")
+                    
+                    # Verify that required environment variables are set
+                    if not project_id or not region or not service_name:
+                        missing_vars = []
+                        if not project_id: missing_vars.append("GCP_PROJECT_ID")
+                        if not region: missing_vars.append("GCP_REGION")
+                        if not service_name: missing_vars.append("GCP_SERVICE_NAME")
+                        error_msg = f"Missing required GCP environment variables: {', '.join(missing_vars)}"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+                    
+                    logger.info(f"Querying GCP metrics from {cost_start_time.isoformat()} to {cost_end_time.isoformat()}")
+                    logger.info(f"GCP service details: project={project_id}, region={region}, service={service_name}")
+                    
+                    gcp_metrics = get_gcp_metrics(project_id, region, service_name, cost_start_time, cost_end_time)
+                    
+                    # Calculate cost using metrics
+                    cost_metrics['cost_gcp'] = round(self.cost_calculator.calculate_cost(
+                        provider='gcp',
+                        frame_count=len(frame_paths),
+                        cloud_metrics=gcp_metrics
+                    ), 2)
+                except Exception as e:
+                    error_msg = f"Failed to get GCP metrics: {str(e)}"
+                    logger.error(error_msg)
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    
+                    # No fallbacks - just set to zero and report the failure
+                    logger.error("GCP metrics collection failed with no fallback. Cost set to zero.")
+                    cost_metrics['cost_gcp'] = 0.0
+                
             elif provider == 'edge':
                 latency_metrics['latency_edge_ms'] = round(avg_latency*1000, 0)
                 processing_time_metrics['pt_edge_sec'] = round(processing_time, 0)
@@ -506,16 +597,13 @@ class VideoPipeline:
                 count_people['cp_edge'] = person_count
                 precision_recall['precision_edge'] = round((vehicle_precision + person_precision)/2, 2)*100
                 precision_recall['recall_edge'] = round((vehicle_recall + person_recall)/2, 2)*100
-                # cost_metrics['cost_edge'] = round(self.cost_calculator.calculate_cost(provider), 2)
+                
+                # For edge, use processing time directly
+                cost_metrics['cost_edge'] = round(self.cost_calculator.calculate_cost(
+                    provider='edge',
+                    processing_time=processing_time
+                ), 2)
                     
-        # Add count data to the final results
-        all_results['metrics'] = {
-            'latency': latency_metrics,
-            'processing_time': processing_time_metrics,
-            'fps': fps_metrics,
-            'count_vehicles': count_vehicles,
-            'count_people': count_people
-        }
         
         # Load results into postgres database
         self.db.load_data(table_name="latency_metrics", data=latency_metrics)

@@ -208,7 +208,6 @@ async def _process_video_in_background(
             
         # Convert numpy arrays to lists for JSON serialization
         serializable_results = convert_numpy_to_python(results)
-        logger.info(f"Results:")
         logger.info(repr(serializable_results))
 
         # Save results with a single, consistent filename
