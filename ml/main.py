@@ -8,13 +8,13 @@ import argparse
 import logging
 from pathlib import Path
 import glob
-from core.tracking import create_tracker, Detection
-from dataclasses import asdict
+from dataclasses import dataclass
 import time
 import requests
 import base64
 import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+import cv2
 
 # Load environment variables from root directory
 from dotenv import load_dotenv
@@ -22,7 +22,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)),
 
 # Import core components
 from core import (
-    ImageAnalysisProcessor, create_detector, create_tracker, create_cost_calculator
+    ImageAnalysisProcessor, create_detector, create_cost_calculator
 )
 from core.db_utils import Database
 
@@ -35,6 +35,16 @@ logger = logging.getLogger(__name__)
 
 # Global dictionary to store detectors by provider
 _detectors = {}
+
+# Simple Detection dataclass to replace the one from core.tracking
+@dataclass
+class Detection:
+    frame_number: int
+    class_name: str
+    confidence: float
+    bbox: List[float]  # [x1, y1, x2, y2] or ImageBoundingBox object
+    class_id: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 def get_detector_for_provider(provider: str):
     """
@@ -149,9 +159,6 @@ class VideoPipeline:
         
         # Initialize detectors
         self._initialize_detectors()
-
-        # Initialize trackers
-        # self._initialize_trackers()
         
         logger.info("Video pipeline initialized successfully")
     
@@ -165,7 +172,7 @@ class VideoPipeline:
             local_detector = create_detector(
                 provider="local",
                 model_path="yolo11n.pt",
-                confidence_threshold=0.20  # Slightly lower threshold to detect more objects
+                confidence_threshold=0.5  # Increased from 0.20 to 0.5
             )
             self.image_processor.register_detector("local", local_detector)
             _detectors["local"] = local_detector  # Add to global dict
@@ -176,20 +183,20 @@ class VideoPipeline:
             raise RuntimeError(error_msg)
         
         # AWS Rekognition detector
-        aws_detector = create_detector(provider="aws")
+        aws_detector = create_detector(provider="aws", confidence_threshold=0.5)
         self.image_processor.register_detector("aws", aws_detector)
         _detectors["aws"] = aws_detector  # Add to global dict
         
         # Azure Vision detector
         logger.info("Initializing Azure Vision detector...")
-        azure_detector = create_detector(provider="azure")
+        azure_detector = create_detector(provider="azure", confidence_threshold=0.5)
         self.image_processor.register_detector("azure", azure_detector)
         _detectors["azure"] = azure_detector  # Add to global dict
         logger.info("Azure Vision detector initialized")
         
         # Google Cloud Vision detector
         logger.info("Initializing Google Cloud Vision detector...")
-        gcp_detector = create_detector(provider="gcp")
+        gcp_detector = create_detector(provider="gcp", confidence_threshold=0.5)
         self.image_processor.register_detector("gcp", gcp_detector)
         _detectors["gcp"] = gcp_detector  # Add to global dict
         logger.info("Google Cloud Vision detector initialized")
@@ -200,7 +207,7 @@ class VideoPipeline:
             edge_detector = create_detector(
                 provider="edge",
                 edge_endpoint=self.edge_deepsort_tracker,
-                confidence_threshold=0.20,
+                confidence_threshold=0.5,  # Increased from 0.20 to 0.5
                 verify_connection=False  # More robust, won't fail if Raspberry Pi is not available at startup
             )
             self.image_processor.register_detector("edge", edge_detector)
@@ -212,35 +219,8 @@ class VideoPipeline:
             logger.warning("Edge processing will not be available")
         
         logger.info("All detectors initialized successfully")
-    
-    # def _initialize_trackers(self):
-    #     """Initialize trackers for each provider."""
-    #     # DeepSORT tracker with dedicated tracking detector
-    #     try:
-    #         local_tracker = create_tracker(
-    #             max_age=30,
-    #             n_init=3
-    #         )
-    #         self.tracking_processor.register_tracker("local", local_tracker)
-    #         logger.info("DeepSORT tracker initialized for local processing")
-    #     except Exception as e:
-    #         error_msg = f"Failed to initialize DeepSORT tracker: {e}"
-    #         logger.error(error_msg)
-    #         raise RuntimeError(error_msg)
-        
-    #     # AWS and Azure trackers use the same DeepSORT implementation
-    #     # rather than relying on cloud services
-    #     aws_tracker = local_tracker  # Reuse the same tracker
-    #     self.tracking_processor.register_tracker("aws", aws_tracker)
-        
-    #     azure_tracker = local_tracker  # Reuse the same tracker
-    #     self.tracking_processor.register_tracker("azure", azure_tracker)
-        
-    #     logger.info("Trackers initialized successfully")
-    
 
-
-    def process_video(self, video_path, job_id, providers=['gcp'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp
+    def process_video(self, video_path, job_id, providers=['edge', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp
         """
         Process a video using detection methods and return results.
         
@@ -291,7 +271,6 @@ class VideoPipeline:
         cost_metrics = {'video_id': job_id, 'frames': len(frame_paths)}
 
         for provider in providers:
-            tracker = create_tracker()
             logger.info(f"Processing frames with {provider} provider")
             processing_time = time.time()
 
@@ -316,7 +295,7 @@ class VideoPipeline:
                 # Process image using provider's detector
                 # Load image directly to verify it exists and can be loaded
                 
-                detections, latency = self.image_processor.process_image(
+                detections, latency, frame = self.image_processor.process_image(
                     image_path=frame_path,
                     provider=provider
                 )
@@ -334,12 +313,7 @@ class VideoPipeline:
                 frame_results.append(result)
 
                 tracking_time = time.time()
-                # Using detections, run tracking
-                if provider == 'local':
-                    frame_result = tracker.process_frame(detections)
-                    # Store the response to help with debugging
-                    logger.info(f"Local tracking results for frame {frame_number}: {len(frame_result.get('tracks', []))} tracks")
-                elif provider == 'aws' and detections:
+                if provider == 'aws' and detections:
                     # Read the image and convert to base64
                     with open(frame_path, "rb") as image_file:
                         encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
@@ -421,13 +395,9 @@ class VideoPipeline:
                 elif provider == 'edge' and not detections:
                     logger.info(f"Edge processing: No detections found in frame {frame_number}, skipping tracking")
                 
-            if provider != 'local':
-                vehicle_count = tracking_data['vehicle_count']
-                person_count = tracking_data['person_count']
-            else:
-                tracking_results = tracker.get_results()
-                vehicle_count = tracking_results.get('counts', {}).get('vehicle_count', 0)
-                person_count = tracking_results.get('counts', {}).get('person_count', 0)
+            # Get the tracking counts directly from tracking_data
+            vehicle_count = tracking_data['vehicle_count']
+            person_count = tracking_data['person_count']
 
             print(f"Provider {provider}: Detected {vehicle_count} vehicles and {person_count} people")
             # Calculate average latency for this provider
@@ -615,83 +585,6 @@ class VideoPipeline:
         self.db.load_data(table_name="cost_metrics", data=cost_metrics)
 
         return all_results
-    
-    # def test_local_detector(self, image_path=None):
-    #     """
-    #     Test the local detector on a sample image.
-        
-    #     Args:
-    #         image_path: Path to test image, or None to generate a test image
-            
-    #     Returns:
-    #         Detection results
-    #     """
-    #     # Initialize detectors if needed
-    #     self._initialize_detectors()
-        
-    #     # Use provided image or create a blank test image with a square in it
-    #     if image_path and os.path.exists(image_path):
-    #         image = cv2.imread(image_path)
-    #         logger.info(f"Using test image: {image_path}")
-    #     else:
-    #         logger.info("Creating test image with rectangles (simulating objects)")
-    #         # Create a blank image
-    #         image = np.zeros((720, 1280, 3), dtype=np.uint8)
-            
-    #         # Draw rectangles of different colors (simulating objects)
-    #         # Green rectangle (potential person)
-    #         cv2.rectangle(image, (300, 200), (400, 500), (0, 255, 0), -1)
-    #         # Red rectangle (potential car)
-    #         cv2.rectangle(image, (700, 300), (900, 400), (0, 0, 255), -1)
-    #         # Blue rectangle
-    #         cv2.rectangle(image, (100, 100), (200, 200), (255, 0, 0), -1)
-            
-    #         # Save the test image
-    #         test_img_path = "test_image.jpg"
-    #         cv2.imwrite(test_img_path, image)
-    #         logger.info(f"Test image saved to: {test_img_path}")
-    #         image_path = test_img_path
-        
-    #     # Get the local detector
-    #     local_detector = _detectors.get("local")
-    #     if not local_detector:
-    #         logger.info("Local detector not found. Initializing...")
-    #         local_detector = create_detector(
-    #             provider="local",
-    #             model_path="yolo11n.pt",
-    #             confidence_threshold=0.10  # Very low threshold for testing
-    #         )
-        
-    #     logger.info(f"Running detection with confidence threshold: {local_detector.confidence_threshold}")
-        
-    #     # Process image with local detector
-    #     detections = local_detector.process_image(image)
-        
-    #     # Print detection results
-    #     logger.info(f"Found {len(detections)} detections:")
-    #     for i, detection in enumerate(detections):
-    #         logger.info(f"  Detection {i+1}: {detection['detection_type']} with confidence {detection['confidence']:.2f}")
-        
-    #     # Save a visualization of the detections
-    #     result_image = image.copy()
-    #     for detection in detections:
-    #         bbox = detection["bbox"]
-    #         x1, y1, x2, y2 = [int(coord) for coord in bbox]
-    #         label = f"{detection['detection_type']}: {detection['confidence']:.2f}"
-            
-    #         # Draw bounding box
-    #         cv2.rectangle(result_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            
-    #         # Draw label
-    #         font = cv2.FONT_HERSHEY_SIMPLEX
-    #         cv2.putText(result_image, label, (x1, y1 - 10), font, 0.5, (0, 255, 0), 2)
-        
-    #     # Save the result
-    #     result_path = "test_result.jpg"
-    #     cv2.imwrite(result_path, result_image)
-    #     logger.info(f"Saved detection visualization to: {result_path}")
-        
-    #     return detections
 
 def main():
     """Main entry point for video processing pipeline."""
@@ -700,7 +593,7 @@ def main():
     parser.add_argument('--output', type=str, default='./data/object_detection/images', help='Output directory for frames')
     parser.add_argument('--expected_vehicles', type=int, default=0, help='Expected number of vehicles in the video')
     parser.add_argument('--expected_people', type=int, default=0, help='Expected number of people in the video')
-    parser.add_argument('--provider', type=str, default='local', choices=['local', 'aws', 'azure', 'gcp', 'edge'],
+    parser.add_argument('--provider', type=str, default='edge', choices=['aws', 'azure', 'gcp', 'edge'],
                         help='Provider to use for detection and tracking')
     args = parser.parse_args()
     

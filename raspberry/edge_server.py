@@ -25,8 +25,8 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 
 # Initialize detector and tracker
-detector = YOLODetector(model_path="yolov11n.pt", confidence_threshold=0.20)
-tracker = DeepSORTTracker(max_age=30, n_init=3, max_iou_distance=0.7)
+detector = YOLODetector(model_path="yolov11n.pt", confidence_threshold=0.50)
+tracker = DeepSORTTracker(max_age=70, n_init=5, max_iou_distance=0.7)
 
 # Store active tracking sessions
 tracking_sessions = {}
@@ -92,7 +92,7 @@ def track_objects():
         # Create tracking session if it doesn't exist
         if video_id not in tracking_sessions:
             tracking_sessions[video_id] = {
-                "tracker": DeepSORTTracker(max_age=30, n_init=2, max_iou_distance=0.7),
+                "tracker": DeepSORTTracker(max_iou_distance=0.7, max_age=70, n_init=5, use_features=True),
                 "frames_processed": 0,
                 "last_update": time.time()
             }
@@ -134,7 +134,7 @@ def track_objects():
         session_tracker = session["tracker"]
         
         # Track objects
-        tracks = session_tracker.update(detections)
+        tracks = session_tracker.update(detections, frame=img)
         
         # Extract results
         tracks_result = []

@@ -27,7 +27,7 @@ RUN mkdir -p uploads && chmod 777 uploads && \
     mkdir -p credentials && chmod 755 credentials
 
 # Copy configuration files first to ensure they are present
-COPY cost_config_2.ini cost_config.ini /app/
+COPY cost_config_2.ini /app/
 
 # Copy application code 
 COPY . .

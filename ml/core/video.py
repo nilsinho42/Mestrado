@@ -381,7 +381,7 @@ class ImageAnalysisProcessor(VideoProcessor):
 
         latency = time.time() - start_time
         logger.info(f"Processed image with {provider} detector: {image_path}, latency: {latency:.3f}s, detections: {len(detections)}")
-        return detections, latency
+        return detections, latency, image
     
     # def process_video(self, video_path: str, fps_reduction_factor: int = 5, 
     #                  providers: List[str] = None) -> Dict[str, Any]:

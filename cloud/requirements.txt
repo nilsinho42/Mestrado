@@ -1,4 +1,4 @@
-# Core dependencies for GCP Cloud Run DeepSORT Tracker
+# Core dependencies for Cloud DeepSORT Tracker
 numpy>=1.26.2
 
 # Computer Vision

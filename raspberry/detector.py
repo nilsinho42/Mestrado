@@ -11,7 +11,7 @@ class YOLODetector:
     """
     YOLO detector implementation for Raspberry Pi.
     """
-    def __init__(self, model_path="yolov11n.pt", confidence_threshold=0.20):
+    def __init__(self, model_path="yolov11n.pt", confidence_threshold=0.5):
         """
         Initialize the YOLO detector.
         
