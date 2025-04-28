@@ -259,9 +259,7 @@ class AWSRekognitionDetector():
             try:
                 import boto3
                 self.rekognition_client = boto3.client('rekognition')
-                logger.info("Initialized AWS Rekognition client")
             except Exception as e:
-                logger.error(f"Failed to initialize AWS Rekognition client: {str(e)}")
                 raise RuntimeError(f"Failed to initialize AWS Rekognition client: {str(e)}")
     
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
@@ -363,10 +361,7 @@ class AzureVisionDetector():
                     endpoint=azure_endpoint,
                     credential=AzureKeyCredential(azure_key)
                 )
-
-                logger.info("Initialized Azure Vision 4.0 client")
             except Exception as e:
-                logger.error(f"Failed to initialize Azure Vision 4.0 client: {str(e)}")
                 raise RuntimeError(f"Failed to initialize Azure Vision 4.0 client: {str(e)}")
     
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:
@@ -520,9 +515,7 @@ class GCPVisionDetector():
                 
                 # Initialize the client
                 self.vision_client = vision.ImageAnnotatorClient()
-                logger.info("Initialized Google Cloud Vision client")
             except Exception as e:
-                logger.error(f"Failed to initialize Google Cloud Vision client: {str(e)}")
                 raise RuntimeError(f"Failed to initialize Google Cloud Vision client: {str(e)}")
     
     def detect(self, image: np.ndarray) -> List[Dict[str, Any]]:

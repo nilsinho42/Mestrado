@@ -1,7 +1,5 @@
-import os
 import logging
 import time
-import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

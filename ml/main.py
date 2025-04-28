@@ -14,7 +14,6 @@ import requests
 import base64
 import datetime
 from typing import Dict, Any, List, Optional
-import cv2
 
 # Load environment variables from root directory
 from dotenv import load_dotenv
@@ -59,48 +58,26 @@ def get_detector_for_provider(provider: str):
     logger.info(f"Getting detector for provider: {provider}")
     # Convert provider name to standard form for lookup
     lookup_key = provider.lower()
-
-    logger.info(f"Lookup key for provider {provider}: {lookup_key}")
-    logger.info(f"Available detectors: {list(_detectors.keys())}")
     
     # Return from global dict if available
     if lookup_key in _detectors:
-        logger.info(f"Found detector for {lookup_key} in global registry")
         return _detectors[lookup_key]
 
-def setup_directories():
-    """Set up the required directories."""
-    directories = [
-        "./data",
-        "./data/object_detection",
-        "./data/object_detection/images",
-        "./data/results"
-    ]
-    
-    for directory in directories:
-        os.makedirs(directory, exist_ok=True)
-    
-    logger.info("Created required directories")
 
 def convert_detection(detection: Detection, provider: str) -> dict:
     """Convert our Detection object to the format expected by tracker_app"""
+    result = {
+        'confidence': detection.confidence,
+        'class_id': detection.class_id if detection.class_id is not None else 0,
+        'class_name': detection.class_name
+    }
 
     if provider == 'azure':
-        logger.info(f"Detection class: {detection.class_id} {detection.class_name}")
         box_data = detection.bbox._data  # Extract the dict from ImageBoundingBox
-        result = {
-            'box': [box_data['x'], box_data['y'], box_data['w'], box_data['h']],
-            'confidence': detection.confidence,
-            'class_id': detection.class_id if detection.class_id is not None else 0,
-            'class_name': detection.class_name
-        }
+        result.update({'box': [box_data['x'], box_data['y'], box_data['w'], box_data['h']]})
     else:  # aws, gcp, or edge
-        result = {
-            'box': detection.bbox,  # Already in [x1, y1, x2, y2] format
-            'confidence': detection.confidence,
-            'class_id': detection.class_id if detection.class_id is not None else 0,
-            'class_name': detection.class_name
-        }
+        result.update({'box': detection.bbox})
+
     return result
 
 def process_response(response: requests.Response, tracking_data: dict) -> dict:
@@ -131,9 +108,6 @@ class VideoPipeline:
         Args:
             output_dir: Directory to save extracted images
         """
-        # Set up directories
-        setup_directories()
-        
         # Create output directory
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -166,61 +140,35 @@ class VideoPipeline:
         """Initialize detectors for each provider with simplified approach."""
         global _detectors
         
-        # Local detector based on YOLOv11n
-        try:
-            logger.info("Initializing local detector for image processing...")
-            local_detector = create_detector(
-                provider="local",
-                model_path="yolo11n.pt",
-                confidence_threshold=0.5  # Increased from 0.20 to 0.5
-            )
-            self.image_processor.register_detector("local", local_detector)
-            _detectors["local"] = local_detector  # Add to global dict
-            logger.info("Local detector initialized for image processing")
-        except Exception as e:
-            error_msg = f"Failed to initialize local detector: {e}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-        
         # AWS Rekognition detector
         aws_detector = create_detector(provider="aws", confidence_threshold=0.5)
         self.image_processor.register_detector("aws", aws_detector)
         _detectors["aws"] = aws_detector  # Add to global dict
+        logger.info("AWS detector initialized")
         
         # Azure Vision detector
-        logger.info("Initializing Azure Vision detector...")
         azure_detector = create_detector(provider="azure", confidence_threshold=0.5)
         self.image_processor.register_detector("azure", azure_detector)
         _detectors["azure"] = azure_detector  # Add to global dict
         logger.info("Azure Vision detector initialized")
         
         # Google Cloud Vision detector
-        logger.info("Initializing Google Cloud Vision detector...")
         gcp_detector = create_detector(provider="gcp", confidence_threshold=0.5)
         self.image_processor.register_detector("gcp", gcp_detector)
         _detectors["gcp"] = gcp_detector  # Add to global dict
         logger.info("Google Cloud Vision detector initialized")
         
-        # Edge detector (Raspberry Pi)
-        try:
-            logger.info("Initializing Edge detector for Raspberry Pi processing...")
-            edge_detector = create_detector(
-                provider="edge",
-                edge_endpoint=self.edge_deepsort_tracker,
-                confidence_threshold=0.5,  # Increased from 0.20 to 0.5
-                verify_connection=False  # More robust, won't fail if Raspberry Pi is not available at startup
-            )
-            self.image_processor.register_detector("edge", edge_detector)
-            _detectors["edge"] = edge_detector  # Add to global dict
-            logger.info("Edge detector initialized for Raspberry Pi processing")
-        except Exception as e:
-            error_msg = f"Failed to initialize edge detector: {e}"
-            logger.error(error_msg)
-            logger.warning("Edge processing will not be available")
+        edge_detector = create_detector(
+            provider="edge",
+            edge_endpoint=self.edge_deepsort_tracker,
+            confidence_threshold=0.5,  # Increased from 0.20 to 0.5
+            verify_connection=False  # More robust, won't fail if Raspberry Pi is not available at startup
+        )
+        self.image_processor.register_detector("edge", edge_detector)
+        _detectors["edge"] = edge_detector  # Add to global dict
+        logger.info("Edge detector initialized for Raspberry Pi processing")
         
-        logger.info("All detectors initialized successfully")
-
-    def process_video(self, video_path, job_id, providers=['edge', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp
+    def process_video(self, video_path, job_id, providers=['edge'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
         """
         Process a video using detection methods and return results.
         
@@ -294,7 +242,6 @@ class VideoPipeline:
                 
                 # Process image using provider's detector
                 # Load image directly to verify it exists and can be loaded
-                
                 detections, latency, frame = self.image_processor.process_image(
                     image_path=frame_path,
                     provider=provider
@@ -313,11 +260,11 @@ class VideoPipeline:
                 frame_results.append(result)
 
                 tracking_time = time.time()
+
+                with open(frame_path, "rb") as image_file:
+                    encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+
                 if provider == 'aws' and detections:
-                    # Read the image and convert to base64
-                    with open(frame_path, "rb") as image_file:
-                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
-                    
                     # Create payload matching ImageData format
                     payload = {
                         "image": encoded_image,
@@ -326,15 +273,9 @@ class VideoPipeline:
                         "video_id": job_id
                     }
                     
-                    # Send request to correct endpoint
                     response = requests.post(f"{self.aws_deepsort_tracker}/api/track", json=payload)
-                    tracking_data = process_response(response, tracking_data)
-                    logger.info(response.json())
+
                 elif provider == 'azure' and detections:
-                    # Read the image and convert to base64
-                    with open(frame_path, "rb") as image_file:
-                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
-                    
                     # Create payload matching ImageData format
                     payload = {
                         "image": encoded_image,
@@ -343,16 +284,9 @@ class VideoPipeline:
                         "video_id": job_id
                     }
                     
-                    # Send request to correct endpoint
-                    logger.info(f"Sending request to {self.azure_deepsort_tracker}/api/track")
                     response = requests.post(f"{self.azure_deepsort_tracker}/api/track", json=payload)
-                    tracking_data = process_response(response, tracking_data)
-                    logger.info(response.json())
+
                 elif provider == 'gcp' and detections:
-                    # Read the image and convert to base64
-                    with open(frame_path, "rb") as image_file:
-                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
-                    
                     # Create payload matching ImageData format
                     payload = {
                         "image": encoded_image,
@@ -361,16 +295,9 @@ class VideoPipeline:
                         "video_id": job_id
                     }
                     
-                    # Send request to correct endpoint
-                    logger.info(f"Sending request to {self.gcp_deepsort_tracker}/api/track")
                     response = requests.post(f"{self.gcp_deepsort_tracker}/api/track", json=payload)
-                    tracking_data = process_response(response, tracking_data)
-                    logger.info(response.json())
+
                 elif provider == 'edge' and detections:
-                    # Read the image and convert to base64
-                    with open(frame_path, "rb") as image_file:
-                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
-                    
                     # Create payload matching ImageData format
                     payload = {
                         "image": encoded_image,
@@ -379,27 +306,18 @@ class VideoPipeline:
                         "video_id": job_id
                     }
                     
-                    # Send request to correct endpoint
-                    logger.info(f"Edge processing: Found {len(detections)} detections in frame {frame_number}")
-                    try:
-                        logger.info(f"Sending request to {self.edge_deepsort_tracker}/api/track")
-                        response = requests.post(f"{self.edge_deepsort_tracker}/api/track", json=payload, timeout=10)
-                        tracking_data = process_response(response, tracking_data)
-                        logger.info(f"Edge tracking successful: {response.json()}")
-                    except requests.exceptions.Timeout:
-                        logger.error(f"Edge tracking request timed out for frame {frame_number}")
-                    except requests.exceptions.ConnectionError as e:
-                        logger.error(f"Edge tracking connection error for frame {frame_number}: {str(e)}")
-                    except Exception as e:
-                        logger.error(f"Edge tracking error for frame {frame_number}: {str(e)}")
-                elif provider == 'edge' and not detections:
-                    logger.info(f"Edge processing: No detections found in frame {frame_number}, skipping tracking")
+                    response = requests.post(f"{self.edge_deepsort_tracker}/api/track", json=payload, timeout=10)
+            
+                # Process the response
+                tracking_data = process_response(response, tracking_data)
+
                 
             # Get the tracking counts directly from tracking_data
             vehicle_count = tracking_data['vehicle_count']
             person_count = tracking_data['person_count']
 
-            print(f"Provider {provider}: Detected {vehicle_count} vehicles and {person_count} people")
+            print(f"[{provider}]: Detected {vehicle_count} vehicles and {person_count} people")
+            
             # Calculate average latency for this provider
             avg_latency = sum(f['latency'] for f in frame_results) / len(frame_results)
             processing_time = time.time() - processing_time 
@@ -450,28 +368,13 @@ class VideoPipeline:
                 precision_recall['recall_azure'] = round((vehicle_recall + person_recall)/2, 2)*100
                 
                 from core.cost_calculator import get_azure_metrics
-                try:
-                    # Use environment variables for resource group
-                    
-                    logger.info(f"Querying Azure metrics from {cost_start_time.isoformat()} to {cost_end_time.isoformat()}")
-                    azure_metrics = get_azure_metrics(cost_start_time, cost_end_time)
-                    
-                    # Calculate cost using metrics
-                    cost_metrics['cost_azure'] = round(self.cost_calculator.calculate_cost(
-                        provider='azure',
-                        frame_count=len(frame_paths),
-                        cloud_metrics=azure_metrics
-                    ), 2)
-                    logger.info(f"Azure metrics collected successfully. Cost: {cost_metrics['cost_azure']}")
-                except Exception as e:
-                    error_msg = f"Failed to get Azure metrics: {str(e)}"
-                    logger.error(error_msg)
-                    import traceback
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    
-                    # No fallbacks - just set to zero and report the failure
-                    logger.error("Azure metrics collection failed with no fallback. Cost set to zero.")
-                    cost_metrics['cost_azure'] = 0.0
+                azure_metrics = get_azure_metrics(cost_start_time, cost_end_time)
+                # Calculate cost using metrics
+                cost_metrics['cost_azure'] = round(self.cost_calculator.calculate_cost(
+                    provider='azure',
+                    frame_count=len(frame_paths),
+                    cloud_metrics=azure_metrics
+                ), 2)
                 
             elif provider == 'aws':
                 latency_metrics['latency_aws_ms'] = round(avg_latency*1000, 0)
@@ -482,34 +385,15 @@ class VideoPipeline:
                 precision_recall['precision_aws'] = round((vehicle_precision + person_precision)/2, 2)*100
                 precision_recall['recall_aws'] = round((vehicle_recall + person_recall)/2, 2)*100
                 
-                # AWS metric collection
-                try:
-                    logger.info(f"Collecting AWS metrics for service {self.aws_deepsort_tracker} in cluster {self.aws_deepsort_tracker}")
+                from core.cost_calculator import get_aws_metrics
                     
-                    # Import the function directly
-                    from core.cost_calculator import get_aws_metrics
-                    
-                    logger.info(f"Querying AWS metrics from {cost_start_time.isoformat()} to {cost_end_time.isoformat()}")
-                    aws_metrics = get_aws_metrics(
-                        start_time=cost_start_time,
-                        end_time=cost_end_time
-                    )
-                    # This should not be calculating azure costs with aws metrics
-                    cost_metrics['cost_aws'] = round(self.cost_calculator.calculate_cost(
-                        provider='aws',
-                        frame_count=len(frame_paths),
-                        cloud_metrics=aws_metrics
-                    ), 2)
-                    logger.info(f"AWS metrics collected successfully. Cost: {cost_metrics['cost_aws']}")
-                except Exception as e:
-                    error_msg = f"Failed to collect AWS metrics: {str(e)}"
-                    logger.error(error_msg)
-                    import traceback
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    
-                    # No fallbacks - just set to zero and report the failure
-                    logger.error("AWS metrics collection failed with no fallback. Cost set to zero.")
-                    cost_metrics['cost_aws'] = 0.0
+                aws_metrics = get_aws_metrics(start_time=cost_start_time, end_time=cost_end_time)
+                # This should not be calculating azure costs with aws metrics
+                cost_metrics['cost_aws'] = round(self.cost_calculator.calculate_cost(
+                    provider='aws',
+                    frame_count=len(frame_paths),
+                    cloud_metrics=aws_metrics
+                ), 2)
                 
             elif provider == 'gcp':
                 latency_metrics['latency_gcp_ms'] = round(avg_latency*1000, 0)
@@ -522,42 +406,24 @@ class VideoPipeline:
                 
                 # Get GCP metrics for cost calculation
                 from core.cost_calculator import get_gcp_metrics
-                try:
-                    # Use environment variables for GCP resources
-                    project_id = os.getenv("GCP_PROJECT_ID", "video-processor")
-                    region = os.getenv("GCP_REGION", "us-central1")
-                    service_name = os.getenv("GCP_SERVICE_NAME", "gcp-deepsort-tracker")
+                # Use environment variables for GCP resources
+                project_id = os.getenv("GCP_PROJECT_ID", "video-processor")
+                region = os.getenv("GCP_REGION", "us-central1")
+                service_name = os.getenv("GCP_SERVICE_NAME", "gcp-deepsort-tracker")
+                
+                # Verify that required environment variables are set
+                # if not project_id: missing_vars.append("GCP_PROJECT_ID")
+                # if not region: missing_vars.append("GCP_REGION")
+                # if not service_name: missing_vars.append("GCP_SERVICE_NAME")
                     
-                    # Verify that required environment variables are set
-                    if not project_id or not region or not service_name:
-                        missing_vars = []
-                        if not project_id: missing_vars.append("GCP_PROJECT_ID")
-                        if not region: missing_vars.append("GCP_REGION")
-                        if not service_name: missing_vars.append("GCP_SERVICE_NAME")
-                        error_msg = f"Missing required GCP environment variables: {', '.join(missing_vars)}"
-                        logger.error(error_msg)
-                        raise ValueError(error_msg)
+                gcp_metrics = get_gcp_metrics(project_id, region, service_name, cost_start_time, cost_end_time)
                     
-                    logger.info(f"Querying GCP metrics from {cost_start_time.isoformat()} to {cost_end_time.isoformat()}")
-                    logger.info(f"GCP service details: project={project_id}, region={region}, service={service_name}")
-                    
-                    gcp_metrics = get_gcp_metrics(project_id, region, service_name, cost_start_time, cost_end_time)
-                    
-                    # Calculate cost using metrics
-                    cost_metrics['cost_gcp'] = round(self.cost_calculator.calculate_cost(
-                        provider='gcp',
-                        frame_count=len(frame_paths),
-                        cloud_metrics=gcp_metrics
-                    ), 2)
-                except Exception as e:
-                    error_msg = f"Failed to get GCP metrics: {str(e)}"
-                    logger.error(error_msg)
-                    import traceback
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    
-                    # No fallbacks - just set to zero and report the failure
-                    logger.error("GCP metrics collection failed with no fallback. Cost set to zero.")
-                    cost_metrics['cost_gcp'] = 0.0
+                # Calculate cost using metrics
+                cost_metrics['cost_gcp'] = round(self.cost_calculator.calculate_cost(
+                    provider='gcp',
+                    frame_count=len(frame_paths),
+                    cloud_metrics=gcp_metrics
+                ), 2)
                 
             elif provider == 'edge':
                 latency_metrics['latency_edge_ms'] = round(avg_latency*1000, 0)
