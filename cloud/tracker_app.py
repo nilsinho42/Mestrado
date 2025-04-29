@@ -95,13 +95,15 @@ class Detection:
             features: Optional feature vector
         """
         # Convert [x1, y1, x2, y2] to [x, y, width, height]
-        self.tlwh = np.array([bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]], dtype=np.float64)
+        x1, y1, x2, y2 = bbox
+        width, height = x2 - x1, y2 - y1
+        self.tlwh = np.array([x1, y1, width, height], dtype=np.float64)
         self.confidence = float(confidence)
-        self.class_id = class_id 
+        self.class_id = class_id
         self.class_name = class_name
         self.frame_number = frame_number
         self.features = features
-
+        
     def to_tlbr(self):
         """Convert bounding box to format `(min x, min y, max x, max y)`"""
         ret = self.tlwh.copy()
@@ -223,7 +225,7 @@ class Track:
     """
     A track class for holding a single tracked object state.
     """
-    def __init__(self, mean, covariance, track_id, class_id, class_name, confidence, n_init=5, max_age=70, features=None):
+    def __init__(self, mean, covariance, track_id, class_id, class_name, confidence, n_init, max_age=70, features=None):
         self.mean = mean
         self.covariance = covariance
         self.track_id = track_id
@@ -266,6 +268,7 @@ class Track:
         self.time_since_update = 0
         if self.state == 1 and self.hits >= self._n_init:
             self.state = 2  # confirmed
+        # Update features if available
         if hasattr(detection, 'features') and detection.features is not None:
             self.features = detection.features
 
@@ -302,8 +305,6 @@ class DeepSORTTracker:
         self.kf = KalmanFilter()
         self.tracks = []
         self._next_id = 1
-        
-        # Tracking metrics
         self.vehicle_count = 0
         self.person_count = 0
         self.tracked_ids = {
@@ -348,15 +349,17 @@ class DeepSORTTracker:
                 if det.features is None:
                     det.features = extract_color_features(frame, det.to_tlbr())
         
+        # Predict step
+        self.predict()
+
         # Run matching cascade
         matches, unmatched_tracks, unmatched_detections = self._match(detection_objects)
 
         # Update track set
         for track_idx, detection_idx in matches:
-            self.tracks[track_idx].update(
-                self.kf, detection_objects[detection_idx])
+            self.tracks[track_idx].update(self.kf, detection_objects[detection_idx])
             
-            # Update counts
+            # Update counters for metrics
             self._update_counts(self.tracks[track_idx])
             
         for track_idx in unmatched_tracks:
@@ -369,7 +372,7 @@ class DeepSORTTracker:
         self.tracks = [t for t in self.tracks if not t.is_deleted()]
         
         return self.tracks
-
+    
     def _is_vehicle(self, class_name):
         """Check if the class name represents a vehicle."""
         vehicle_keywords = ['car', 'truck', 'bus', 'vehicle', 'automobile', 'van', 'suv', 'motorbike', 'bicycle']
@@ -430,6 +433,8 @@ class DeepSORTTracker:
             for j, detection_idx in enumerate(detection_indices):
                 detection_bbox = detections[detection_idx].tlwh
                 iou_cost_matrix[i, j] = 1.0 - self._calculate_iou(track_bbox, detection_bbox)
+                
+        logger.debug(f"IoU cost matrix: min={np.min(iou_cost_matrix):.4f}, max={np.max(iou_cost_matrix):.4f}")
         
         # Compute feature distance cost matrix if features are available
         if self.use_features:
@@ -437,10 +442,12 @@ class DeepSORTTracker:
             for i, track_idx in enumerate(track_indices):
                 if hasattr(self.tracks[track_idx], 'features') and self.tracks[track_idx].features is not None:
                     track_features = self.tracks[track_idx].features
-                    for j, det_idx in enumerate(detection_indices):
-                        if hasattr(detections[det_idx], 'features') and detections[det_idx].features is not None:
-                            detection_features = detections[det_idx].features
+                    for j, detection_idx in enumerate(detection_indices):
+                        if hasattr(detections[detection_idx], 'features') and detections[detection_idx].features is not None:
+                            detection_features = detections[detection_idx].features
                             feature_cost_matrix[i, j] = self._feature_distance(track_features, detection_features)
+            
+            logger.debug(f"Feature cost matrix: min={np.min(feature_cost_matrix):.4f}, max={np.max(feature_cost_matrix):.4f}")
             
             # Combine IoU and feature cost matrices
             cost_matrix = (1.0 - self.feature_weight) * iou_cost_matrix + self.feature_weight * feature_cost_matrix
@@ -449,9 +456,11 @@ class DeepSORTTracker:
             
         # Add class name matching bonus
         for i, track_idx in enumerate(track_indices):
-            for j, det_idx in enumerate(detection_indices):
-                if self.tracks[track_idx].class_name == detections[det_idx].class_name:
+            for j, detection_idx in enumerate(detection_indices):
+                if self.tracks[track_idx].class_name == detections[detection_idx].class_name:
                     cost_matrix[i, j] *= 0.9  # 10% bonus for same class
+        
+        logger.debug(f"Cost matrix: min={np.min(cost_matrix):.4f}, max={np.max(cost_matrix):.4f}, threshold={self.max_iou_distance}")
         
         # Apply maximum distance threshold
         cost_matrix[cost_matrix > self.max_iou_distance] = float('inf')
@@ -471,13 +480,13 @@ class DeepSORTTracker:
                 unmatched_tracks.append(track_indices[row])
                 
         for row, col in indices:
-            track_idx = track_indices[row]
-            detection_idx = detection_indices[col]
             if cost_matrix[row, col] >= float('inf'):
-                unmatched_tracks.append(track_idx)
-                unmatched_detections.append(detection_idx)
+                unmatched_tracks.append(track_indices[row])
+                unmatched_detections.append(detection_indices[col])
             else:
-                matches.append((track_idx, detection_idx))
+                matches.append((track_indices[row], detection_indices[col]))
+        
+        logger.debug(f"Matching results: {len(matches)} matches, {len(unmatched_tracks)} unmatched tracks, {len(unmatched_detections)} unmatched detections")
                 
         return matches, unmatched_tracks, unmatched_detections
 
@@ -504,6 +513,10 @@ class DeepSORTTracker:
         
         # Calculate IoU
         union_area = bbox1_area + bbox2_area - inter_area
+        
+        iou = inter_area / union_area if union_area > 0 else 0
+        logger.debug(f"IoU calculation: {iou:.4f}")
+        
         if union_area <= 0:
             return 0
         return inter_area / union_area
@@ -511,16 +524,16 @@ class DeepSORTTracker:
     def _initiate_track(self, detection):
         """Initialize a new track from a detection."""
         mean, covariance = self.kf.initiate(detection.to_xyah())
-        track = Track(mean, covariance, self._next_id, detection.class_id, 
-                    detection.class_name, detection.confidence, 
-                    self.n_init, self.max_age, features=detection.features)
-        self.tracks.append(track)
+        self.tracks.append(Track(
+            mean, covariance, self._next_id, detection.class_id,
+            detection.class_name, detection.confidence, self.n_init, 
+            max_age=self.max_age, features=detection.features))
         
-        # Update counts
-        self._update_counts(track)
-        
+        # Update counters for metrics
+        self._update_counts(self.tracks[-1])  # Update counts for the newly added track
+                
         self._next_id += 1
-
+        
     def _feature_distance(self, track_features, detection_features):
         """Calculate cosine distance between feature vectors."""
         if track_features is None or detection_features is None:
@@ -536,7 +549,7 @@ class DeepSORTTracker:
         similarity = np.dot(track_features, detection_features)
         # Convert to distance (1 - similarity)
         return max(0.0, 1.0 - similarity)
-    
+        
     def get_results(self):
         """Get counts and other metrics."""
         return {
@@ -549,16 +562,6 @@ class DeepSORTTracker:
                 "person": list(self.tracked_ids['person'])
             }
         }
-        
-    def get_count_metrics(self):
-        """Return count metrics for vehicles and people (for backward compatibility)."""
-        return {
-            "vehicle_count": self.vehicle_count,
-            "person_count": self.person_count
-        }
-
-# For backward compatibility
-Tracker = DeepSORTTracker
 
 # Models for API requests and responses
 class ImageData(BaseModel):
@@ -582,71 +585,94 @@ async def track_objects(data: ImageData):
     try:
         start_time = time.time()
         
-        # Create tracking session if it doesn't exist
+        # Log session and request data for debugging
         video_id = data.video_id or str(uuid.uuid4())
+        logger.info(f"[{video_id}] Received track request for frame {data.frame_idx} with {len(data.detections)} detections")
+        
+        # Log all incoming detections
+        for i, det in enumerate(data.detections):
+            det_data = {
+                "index": i,
+                "class_name": det.get('class_name', 'unknown'),
+                "confidence": det.get('confidence', 0),
+                "box": det.get('box', [])
+            }
+            logger.info(f"[{video_id}] Detection {i}: {det_data}")
+        
+        # Create tracking session if it doesn't exist
         if video_id not in tracking_sessions:
             tracking_sessions[video_id] = {
-                "tracker": DeepSORTTracker(max_iou_distance=0.7, max_age=70, n_init=5, use_features=True),
+                "tracker": DeepSORTTracker(max_iou_distance=0.9, max_age=70, n_init=3, use_features=True),
                 "frames_processed": 0,
                 "last_update": time.time()
             }
+            logger.info(f"[{video_id}] Created new tracking session with max_iou_distance=0.9, max_age=70, n_init=3")
         
         # Decode image from base64
-        try:
-            img_bytes = base64.b64decode(data.image)
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            
-            if img is None:
-                raise ValueError("Could not decode image")
-                
-            # Save image temporarily for debugging (optional)
-            frame_path = TEMP_DIR / f"{video_id}_{data.frame_idx}.jpg"
-            cv2.imwrite(str(frame_path), img)
-        except Exception as e:
-            logger.error(f"Error decoding image: {e}")
-            raise HTTPException(status_code=400, detail=f"Invalid image format: {str(e)}")
+        img_bytes = base64.b64decode(data.image)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            raise ValueError("Could not decode image")
         
         # Convert detections to the format expected by DeepSORT
         deepsort_detections = []
-        for det in data.detections:
-            # Get box in [x1, y1, x2, y2] format
+        for i, det in enumerate(data.detections):
+            # Get box
+            if 'box' not in det:
+                logger.warning(f"[{video_id}] Detection {i} missing 'box' field: {det}")
+                continue
+                
             box = det['box']
             
-            # Create detection instance
+            # Ensure box is properly formatted
+            if not isinstance(box, list) or len(box) != 4:
+                logger.warning(f"[{video_id}] Invalid box format: {box}, expected 4 values")
+                continue
+            
+            # Ensure box is in [x1, y1, x2, y2] format
+            if len(box) == 4:
+                # Check if it appears to be in [x, y, w, h] format
+                if box[2] < box[0] or box[3] < box[1]:  # width/height are smaller than position
+                    # Convert [x, y, w, h] to [x1, y1, x2, y2]
+                    bbox = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+                    logger.info(f"[{video_id}] Converted [x,y,w,h] to [x1,y1,x2,y2]: {box} → {bbox}")
+                else:
+                    bbox = box
+            else:
+                logger.warning(f"[{video_id}] Unknown box format: {box}")
+                continue
+            
+            # Create detection object
             detection = Detection(
-                bbox=box,
-                confidence=det['confidence'],
-                class_id=det['class_id'],
-                class_name=det['class_name']
+                bbox=bbox,
+                confidence=det.get('confidence', 0.5),
+                class_id=det.get('class_id', 0),
+                class_name=det.get('class_name', 'unknown')
             )
             
             # Extract features if using appearance model
-            if tracking_sessions[video_id]["tracker"].use_features:
-                features = extract_color_features(img, box)
+            if hasattr(detection, 'features') and detection.features is None:
+                features = extract_color_features(img, bbox)
                 detection.features = features
             
             deepsort_detections.append(detection)
+            logger.debug(f"[{video_id}] Added Detection: class={detection.class_name}, confidence={detection.confidence:.2f}")
         
         # Update tracker with detections
         session = tracking_sessions[video_id]
-        session_tracker = session["tracker"]
+        tracks = session["tracker"].update(deepsort_detections, img)
         
-        # Predict step (propagate tracks state)
-        session_tracker.predict()
-        
-        # Update step (associate detections with tracks)
-        session_tracker.update(deepsort_detections, img)
-        
-        # Extract results
-        tracks = []
-        for track in session_tracker.tracks:
+        # Extract track results
+        track_results = []
+        for track in tracks:
             if not track.is_confirmed():
                 continue
                 
             track_box = track.to_tlbr()  # [x1, y1, x2, y2] format
             
-            tracks.append({
+            track_results.append({
                 'track_id': track.track_id,
                 'class_id': track.class_id,
                 'class_name': track.class_name,
@@ -660,17 +686,18 @@ async def track_objects(data: ImageData):
         # Calculate processing time
         processing_time = time.time() - start_time
         
-        # Clean up old sessions (sessions inactive for more than 30 minutes)
+        # Clean up old sessions (those inactive for more than 30 minutes)
         current_time = time.time()
         for vid in list(tracking_sessions.keys()):
-            if current_time - tracking_sessions[vid]["last_update"] > 1800:
+            if current_time - tracking_sessions[vid]["last_update"] > 1800:  # 30 minutes
                 del tracking_sessions[vid]
+                logger.info(f"Removed inactive tracking session: {vid}")
         
         # Return tracking results
         return {
             "video_id": video_id,
             "frame_idx": data.frame_idx,
-            "tracks": tracks,
+            "tracks": track_results,
             "processing_time": processing_time
         }
     except Exception as e:
@@ -692,13 +719,36 @@ async def get_status(video_id: str):
         tracker = session["tracker"]
         results = tracker.get_results()
         
+        # Get additional track information for diagnostics
+        track_details = []
+        for track in tracker.tracks:
+            track_details.append({
+                "track_id": track.track_id,
+                "class_name": track.class_name,
+                "confidence": track.confidence,
+                "state": "confirmed" if track.is_confirmed() else "tentative" if track.is_tentative() else "deleted",
+                "age": track.age,
+                "hits": track.hits,
+                "time_since_update": track.time_since_update,
+                "is_vehicle": tracker._is_vehicle(track.class_name),
+                "is_person": tracker._is_person(track.class_name)
+            })
+        
         return {
             "video_id": video_id,
             "frames_processed": session["frames_processed"],
             "last_update": session["last_update"],
             "vehicle_count": results["counts"]["vehicle_count"],
             "person_count": results["counts"]["person_count"],
-            "tracked_ids": results["tracked_ids"]
+            "tracked_ids": results["tracked_ids"],
+            "active_tracks": len(tracker.tracks),
+            "track_details": track_details,
+            "tracker_settings": {
+                "max_iou_distance": tracker.max_iou_distance,
+                "max_age": tracker.max_age,
+                "n_init": tracker.n_init,
+                "use_features": tracker.use_features
+            }
         }
     else:
         raise HTTPException(status_code=404, detail=f"No active tracking session for {video_id}")
@@ -708,5 +758,5 @@ async def healthcheck():
     return {"status": "healthy", "active_sessions": len(tracking_sessions)}
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8080"))
+    port = int(os.environ.get("PORT", "8080"))
     uvicorn.run("tracker_app:app", host="0.0.0.0", port=port, log_level="info") 

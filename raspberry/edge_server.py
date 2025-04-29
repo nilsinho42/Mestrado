@@ -26,7 +26,7 @@ app = Flask(__name__)
 
 # Initialize detector and tracker
 detector = YOLODetector(model_path="yolov11n.pt", confidence_threshold=0.50)
-tracker = DeepSORTTracker(max_age=70, n_init=5, max_iou_distance=0.7)
+tracker = DeepSORTTracker(max_iou_distance=0.9, max_age=70, n_init=5, use_features=True)
 
 # Store active tracking sessions
 tracking_sessions = {}
@@ -92,7 +92,7 @@ def track_objects():
         # Create tracking session if it doesn't exist
         if video_id not in tracking_sessions:
             tracking_sessions[video_id] = {
-                "tracker": DeepSORTTracker(max_iou_distance=0.7, max_age=70, n_init=5, use_features=True),
+                "tracker": DeepSORTTracker(max_iou_distance=0.9, max_age=70, n_init=5, use_features=True),
                 "frames_processed": 0,
                 "last_update": time.time()
             }
@@ -118,12 +118,45 @@ def track_objects():
         if 'detections' in data and data['detections']:
             # Convert provided detections to the format expected by the tracker
             for det in data['detections']:
+                if 'box' not in det:
+                    logger.warning(f"Detection missing 'box' field: {det}")
+                    continue
+                    
                 box = det['box']
+                
+                # Ensure box is properly formatted
+                if not isinstance(box, list) or len(box) != 4:
+                    logger.warning(f"Invalid box format: {box}, expected 4 values")
+                    continue
+                
+                # Ensure box is in [x1, y1, x2, y2] format
+                if len(box) == 4:
+                    # Check if it appears to be in [x, y, w, h] format
+                    if box[2] < box[0] or box[3] < box[1]:  # width/height are smaller than position
+                        # Convert [x, y, w, h] to [x1, y1, x2, y2]
+                        bbox = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
+                        logger.info(f"Converted [x,y,w,h] to [x1,y1,x2,y2]: {box} → {bbox}")
+                    else:
+                        bbox = box
+                else:
+                    logger.warning(f"Unknown box format: {box}")
+                    continue
+                
+                # Validate box values
+                if any(not isinstance(coord, (int, float)) for coord in bbox):
+                    logger.warning(f"Box contains non-numeric values: {bbox}")
+                    continue
+                
+                if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                    logger.warning(f"Invalid box dimensions (x2<=x1 or y2<=y1): {bbox}")
+                    continue
+                    
+                # Create detection object
                 detections.append({
-                    'bbox': box,  # [x1, y1, x2, y2] format
-                    'confidence': det['confidence'],
-                    'class_id': det['class_id'],
-                    'class_name': det['class_name']
+                    'bbox': bbox,  # [x1, y1, x2, y2] format
+                    'confidence': det.get('confidence', 0.5),
+                    'class_id': det.get('class_id', 0),
+                    'class_name': det.get('class_name', 'unknown')
                 })
         else:
             # Run detector on the image

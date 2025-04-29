@@ -284,10 +284,12 @@ class ImageAnalysisProcessor(VideoProcessor):
             return []
         
         # Process image with detector
-        logger.info(f"Processing image with {provider} detector: {image_path}")
         start_time = time.time()
         detections = self.detectors[provider].detect(image)
 
+        image_id = image_path.split("_")[-1].split(".")[0]
+
         latency = time.time() - start_time
-        logger.info(f"Processed image with {provider} detector: {image_path}, latency: {latency:.3f}s, detections: {len(detections)}")
+        logger.info(f"[{provider}][{image_id}] Latency: {latency:.3f}s.")
+        
         return detections, latency, image

@@ -84,10 +84,34 @@ def process_response(response: requests.Response, tracking_data: dict) -> dict:
     """Process the response from the tracker_app."""
     resp_data = response.json()
 
+    # Set a minimum box size threshold (as a fraction of image dimensions)
+    # Boxes smaller than this percentage of the frame will be ignored
+    min_box_size_threshold = 0.20  # 1% of frame size
+
     tracks = resp_data.get('tracks', [])
     for track in tracks:
         track_id = track.get('track_id')
         class_name = track.get('class_name', '').lower()
+        
+        # Get the box dimensions
+        box = track.get('box', [0, 0, 0, 0])
+        
+        # Calculate box area (width * height)
+        # For normalized coordinates [x, y, width, height]
+        if len(box) == 4:
+            box_width = box[2]
+            box_height = box[3]
+            
+            # For absolute coordinates [x1, y1, x2, y2]
+            if box[2] > 1 and box[3] > 1:  # Likely absolute coordinates
+                box_width = box[2] - box[0]
+                box_height = box[3] - box[1]
+            
+            box_size = box_width * box_height
+            
+            # Skip small boxes
+            if box_size < min_box_size_threshold:
+                continue
         
         # Check if this is a vehicle
         if 'car' in class_name or 'truck' in class_name or 'bus' in class_name or 'vehicle' in class_name:
@@ -168,7 +192,7 @@ class VideoPipeline:
         _detectors["edge"] = edge_detector  # Add to global dict
         logger.info("Edge detector initialized for Raspberry Pi processing")
         
-    def process_video(self, video_path, job_id, providers=['edge'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
+    def process_video(self, video_path, job_id, providers=['edge', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
         """
         Process a video using detection methods and return results.
         
@@ -246,10 +270,7 @@ class VideoPipeline:
                     image_path=frame_path,
                     provider=provider
                 )
-                
-                if detections:
-                    detections = [Detection(**d, frame_number=frame_number) for d in detections]
-                    
+
                 # Add frame info to results
                 result = {
                     'frame_path': frame_path,
@@ -259,12 +280,20 @@ class VideoPipeline:
                 
                 frame_results.append(result)
 
+                if detections:
+                    detections = [Detection(**d, frame_number=frame_number) for d in detections]
+                else:
+                    continue 
+
                 tracking_time = time.time()
 
                 with open(frame_path, "rb") as image_file:
                     encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                
+                image_id = frame_path.split("_")[-1].split(".")[0]
+                logger.info(f"[{provider}][{image_id}] Tracking {len(detections)} detections.")
 
-                if provider == 'aws' and detections:
+                if provider == 'aws':
                     # Create payload matching ImageData format
                     payload = {
                         "image": encoded_image,
@@ -275,7 +304,7 @@ class VideoPipeline:
                     
                     response = requests.post(f"{self.aws_deepsort_tracker}/api/track", json=payload)
 
-                elif provider == 'azure' and detections:
+                elif provider == 'azure':
                     # Create payload matching ImageData format
                     payload = {
                         "image": encoded_image,
@@ -286,7 +315,7 @@ class VideoPipeline:
                     
                     response = requests.post(f"{self.azure_deepsort_tracker}/api/track", json=payload)
 
-                elif provider == 'gcp' and detections:
+                elif provider == 'gcp':
                     # Create payload matching ImageData format
                     payload = {
                         "image": encoded_image,
@@ -297,7 +326,7 @@ class VideoPipeline:
                     
                     response = requests.post(f"{self.gcp_deepsort_tracker}/api/track", json=payload)
 
-                elif provider == 'edge' and detections:
+                elif provider == 'edge':
                     # Create payload matching ImageData format
                     payload = {
                         "image": encoded_image,
@@ -310,14 +339,14 @@ class VideoPipeline:
             
                 # Process the response
                 tracking_data = process_response(response, tracking_data)
+                logger.info(f"[{provider}][{image_id}] Vehicle count: {tracking_data['vehicle_count']}. Person count: {tracking_data['person_count']}.")
 
-                
             # Get the tracking counts directly from tracking_data
             vehicle_count = tracking_data['vehicle_count']
             person_count = tracking_data['person_count']
 
-            print(f"[{provider}]: Detected {vehicle_count} vehicles and {person_count} people")
-            
+            logger.info(f"[{provider}]: Detected {vehicle_count} vehicles and {person_count} people")
+
             # Calculate average latency for this provider
             avg_latency = sum(f['latency'] for f in frame_results) / len(frame_results)
             processing_time = time.time() - processing_time 
