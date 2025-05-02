@@ -246,7 +246,7 @@ class VideoPipeline:
         
         # Set up tracker endpoints
         self.azure_deepsort_tracker = os.getenv("AZURE_DEEPSORT_ENDPOINT")
-        self.aws_deepsort_tracker = os.getenv("AWS_FARGATE_ENDPOINT")
+        self.aws_deepsort_tracker = os.getenv("AWS_FARGATE_ENDPOINT", "https://avpfh7vmvc.us-east-2.awsapprunner.com")
         self.gcp_deepsort_tracker = os.getenv("GCP_DEEPSORT_TRACKER")   
         self.edge_deepsort_tracker = os.getenv("EDGE_DEEPSORT_ENDPOINT")
         
