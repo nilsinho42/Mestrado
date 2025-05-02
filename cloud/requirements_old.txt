@@ -1,0 +1,21 @@
+# Core dependencies for Cloud DeepSORT Tracker
+numpy>=1.26.2
+
+# Computer Vision
+opencv-python>=4.8.1.78
+
+# Data Processing
+scipy>=1.11.3
+lap>=0.4.0  # Linear Assignment Problem solver for DeepSORT
+
+# API and Web
+fastapi>=0.104.1
+uvicorn>=0.24.0
+
+# Utilities
+pydantic>=2.4.2
+python-dotenv>=1.0.0
+
+# Optional: For deployment and monitoring
+# Uncomment if needed
+# prometheus-client>=0.19.0 

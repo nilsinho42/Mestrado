@@ -14,6 +14,8 @@ import requests
 import base64
 import datetime
 from typing import Dict, Any, List, Optional
+import threading
+import queue
 
 # Load environment variables from root directory
 from dotenv import load_dotenv
@@ -72,21 +74,69 @@ def convert_detection(detection: Detection, provider: str) -> dict:
         'class_name': detection.class_name
     }
 
+    # Each provider's detector returns bounding boxes in different formats:
+    # AWS: [x1, y1, x2, y2] from detector - already in the correct format
+    # Azure: ImageBoundingBox with _data containing {'x', 'y', 'w', 'h'}
+    # GCP: [x1, y1, x2, y2] from detector - already in the correct format
+    # Edge: [x1, y1, x2, y2] from detector - already in the correct format
+    
+    # tracker_app.py expects [x1, y1, x2, y2] format for bbox in Detection objects
+    # but allows incoming 'box' in [x, y, w, h] format and converts it internally
+    # We'll standardize to [x, y, w, h] format for all providers when sending to tracker
+    
     if provider == 'azure':
-        box_data = detection.bbox._data  # Extract the dict from ImageBoundingBox
-        result.update({'box': [box_data['x'], box_data['y'], box_data['w'], box_data['h']]})
+        box_data = detection.bbox._data 
+        x1 = box_data['x']
+        y1 = box_data['y']
+        x2 = x1 + box_data['w']
+        y2 = y1 + box_data['h']
     else:  # aws, gcp, or edge
-        result.update({'box': detection.bbox})
+        # Convert from [x1, y1, x2, y2] to [x, y, w, h]
+        x1, y1, x2, y2 = detection.bbox
+
+    result.update({'box': [x1, y1, x2, y2]})
 
     return result
 
 def process_response(response: requests.Response, tracking_data: dict) -> dict:
     """Process the response from the tracker_app."""
-    resp_data = response.json()
+    # Check if response was successful and has content
+    if not response or response.status_code != 200 or not response.content:
+        logger.info(f"Empty or failed response received: {response.status_code if hasattr(response, 'status_code') else 'No response'}")
+        return tracking_data
+    
+    try:
+        resp_data = response.json()
+    except (requests.exceptions.JSONDecodeError, ValueError) as e:
+        logger.info(f"Failed to decode JSON response: {e}")
+        return tracking_data
+
+    # Validate the response structure
+    if not isinstance(resp_data, dict) or 'tracks' not in resp_data:
+        logger.info(f"Invalid response format: {resp_data}")
+        return tracking_data
+        
+    if not isinstance(resp_data['tracks'], list):
+        logger.info(f"Invalid tracks format: {resp_data['tracks']}")
+        return tracking_data
+
+    # Define classes based on the same patterns used in models.py
+    # Combine all classes from different detectors for maximum compatibility
+    people_classes = [
+        'person', 'human', 'people', 'pedestrian', 'man', 'woman', 'child', 'baby',
+        'Person', 'Human', 'People', 'Pedestrian', 'Man', 'Woman', 'Child', 'Baby'
+    ]
+    
+    vehicle_classes = [
+        'car', 'vehicle', 'automobile', 'truck', 'van', 'bus', 'motorcycle', 'bicycle', 
+        'transportation', 'taxi', 'ambulance', 'police car', 'suv', 'motorbike',
+        'Car', 'Vehicle', 'Automobile', 'Truck', 'Van', 'Bus', 'Motorcycle', 'Bicycle',
+        'Transportation', 'Taxi', 'Ambulance', 'Police Car', 'SUV', 'Motorbike'
+    ]
 
     # Set a minimum box size threshold (as a fraction of image dimensions)
     # Boxes smaller than this percentage of the frame will be ignored
-    min_box_size_threshold = 0.20  # 1% of frame size
+    min_box_size_threshold = 0.05  # 1% of frame size
 
     tracks = resp_data.get('tracks', [])
     for track in tracks:
@@ -97,33 +147,78 @@ def process_response(response: requests.Response, tracking_data: dict) -> dict:
         box = track.get('box', [0, 0, 0, 0])
         
         # Calculate box area (width * height)
-        # For normalized coordinates [x, y, width, height]
-        if len(box) == 4:
-            box_width = box[2]
-            box_height = box[3]
+        # For [x1, y1, x2, y2] format
+        box_width = box[2] - box[0]
+        box_height = box[3] - box[1]
             
-            # For absolute coordinates [x1, y1, x2, y2]
-            if box[2] > 1 and box[3] > 1:  # Likely absolute coordinates
-                box_width = box[2] - box[0]
-                box_height = box[3] - box[1]
+        # Skip invalid dimensions
+        if box_width <= 0 or box_height <= 0:
+            logger.warning(f"Invalid box dimensions: width={box_width}, height={box_height}")
+            continue
+                
+        box_size = box_width * box_height
             
-            box_size = box_width * box_height
-            
-            # Skip small boxes
-            if box_size < min_box_size_threshold:
-                continue
+        # Skip small boxes
+        if box_size < min_box_size_threshold:
+            continue
         
-        # Check if this is a vehicle
-        if 'car' in class_name or 'truck' in class_name or 'bus' in class_name or 'vehicle' in class_name:
+        # Check if this is a vehicle using the combined class list
+        class_name_lower = class_name.lower()
+        is_vehicle = any(vc.lower() in class_name_lower for vc in vehicle_classes)
+        is_person = any(pc.lower() in class_name_lower for pc in people_classes)
+        
+        if is_vehicle:
             if track_id not in tracking_data['tracked_ids']['vehicle']:
                 tracking_data['tracked_ids']['vehicle'].add(track_id)
                 tracking_data['vehicle_count'] += 1
-        elif 'person' in class_name or 'pedestrian' in class_name:
+        elif is_person:
             if track_id not in tracking_data['tracked_ids']['person']:
                 tracking_data['tracked_ids']['person'].add(track_id)
                 tracking_data['person_count'] += 1
     
     return tracking_data
+
+def send_request_with_hard_timeout(url, payload, timeout=15, max_wait=30):
+    """
+    Send a request with a hard timeout using a separate thread.
+    This ensures we never wait longer than max_wait seconds, even for SSL errors.
+    
+    Args:
+        url: The API endpoint URL
+        payload: The request payload (will be sent as JSON)
+        timeout: The requests timeout parameter
+        max_wait: Maximum time to wait for the thread to complete
+        
+    Returns:
+        Response object or None if timeout/error occurred
+    """
+    result_queue = queue.Queue()
+    
+    def _worker():
+        try:
+            response = requests.post(url, json=payload, timeout=timeout)
+            result_queue.put(response)
+        except Exception as e:
+            result_queue.put(e)
+    
+    # Start worker thread
+    thread = threading.Thread(target=_worker)
+    thread.daemon = True  # Daemon threads will be killed when main thread exits
+    thread.start()
+    
+    try:
+        # Wait for result with timeout
+        result = result_queue.get(timeout=max_wait)
+        if isinstance(result, Exception):
+            # Re-raise the exception
+            raise result
+        return result
+    except queue.Empty:
+        # Hard timeout reached
+        return None
+    finally:
+        # The thread will be terminated when the function returns since it's a daemon
+        pass
 
 class VideoPipeline:
     def __init__(self, output_dir: str = "./data/object_detection/images"):
@@ -192,7 +287,7 @@ class VideoPipeline:
         _detectors["edge"] = edge_detector  # Add to global dict
         logger.info("Edge detector initialized for Raspberry Pi processing")
         
-    def process_video(self, video_path, job_id, providers=['edge', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
+    def process_video(self, video_path, job_id, providers=['azure'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
         """
         Process a video using detection methods and return results.
         
@@ -218,8 +313,7 @@ class VideoPipeline:
 
         try:
             # Extract frames from video
-            video_info = self.image_processor.extract_frames(
-                video_path=video_path)
+            video_info = self.image_processor.extract_frames(video_path=video_path)
             
             # First look directly in the output directory
             frame_paths = glob.glob(os.path.join(output_dir, "*.jpg"))
@@ -302,7 +396,25 @@ class VideoPipeline:
                         "video_id": job_id
                     }
                     
-                    response = requests.post(f"{self.aws_deepsort_tracker}/api/track", json=payload)
+                    retry = 0
+                    response = None
+                    while retry < 3:
+                        try:
+                            # Use our thread-based hard timeout to prevent hanging
+                            response = send_request_with_hard_timeout(
+                                f"{self.aws_deepsort_tracker}/api/track", 
+                                payload, 
+                                timeout=15,
+                                max_wait=20  # Never wait more than 20 seconds total
+                            )
+                            if response is not None and response.status_code == 200:
+                                break
+                            if response is None:
+                                raise TimeoutError("Hard timeout reached waiting for API response")
+                        except Exception as e:
+                            logger.warning(f"[{provider}][{image_id}] API call failed (attempt {retry+1}/3): {e}")
+                            retry += 1
+                            time.sleep(0.5)
 
                 elif provider == 'azure':
                     # Create payload matching ImageData format
@@ -313,7 +425,25 @@ class VideoPipeline:
                         "video_id": job_id
                     }
                     
-                    response = requests.post(f"{self.azure_deepsort_tracker}/api/track", json=payload)
+                    retry = 0
+                    response = None
+                    while retry < 3:
+                        try:
+                            # Use our thread-based hard timeout to prevent hanging
+                            response = send_request_with_hard_timeout(
+                                f"{self.azure_deepsort_tracker}/api/track", 
+                                payload, 
+                                timeout=15,
+                                max_wait=20  # Never wait more than 20 seconds total
+                            )
+                            if response is not None and response.status_code == 200:
+                                break
+                            if response is None:
+                                raise TimeoutError("Hard timeout reached waiting for API response")
+                        except Exception as e:
+                            logger.warning(f"[{provider}][{image_id}] API call failed (attempt {retry+1}/3): {e}")
+                            retry += 1
+                            time.sleep(0.5)
 
                 elif provider == 'gcp':
                     # Create payload matching ImageData format
@@ -324,7 +454,25 @@ class VideoPipeline:
                         "video_id": job_id
                     }
                     
-                    response = requests.post(f"{self.gcp_deepsort_tracker}/api/track", json=payload)
+                    retry = 0
+                    response = None
+                    while retry < 3:
+                        try:
+                            # Use our thread-based hard timeout to prevent hanging
+                            response = send_request_with_hard_timeout(
+                                f"{self.gcp_deepsort_tracker}/api/track", 
+                                payload, 
+                                timeout=15,
+                                max_wait=20  # Never wait more than 20 seconds total
+                            )
+                            if response is not None and response.status_code == 200:
+                                break
+                            if response is None:
+                                raise TimeoutError("Hard timeout reached waiting for API response")
+                        except Exception as e:
+                            logger.warning(f"[{provider}][{image_id}] API call failed (attempt {retry+1}/3): {e}")
+                            retry += 1
+                            time.sleep(0.5)
 
                 elif provider == 'edge':
                     # Create payload matching ImageData format
@@ -335,8 +483,36 @@ class VideoPipeline:
                         "video_id": job_id
                     }
                     
-                    response = requests.post(f"{self.edge_deepsort_tracker}/api/track", json=payload, timeout=10)
-            
+                    retry = 0
+                    response = None
+                    while retry < 3:
+                        try:
+                            # Use our thread-based hard timeout to prevent hanging
+                            response = send_request_with_hard_timeout(
+                                f"{self.edge_deepsort_tracker}/api/track", 
+                                payload, 
+                                timeout=10,
+                                max_wait=15  # Never wait more than 15 seconds total
+                            )
+                            if response is not None and response.status_code == 200:
+                                break
+                            if response is None:
+                                raise TimeoutError("Hard timeout reached waiting for API response")
+                        except Exception as e:
+                            logger.warning(f"[{provider}][{image_id}] API call failed (attempt {retry+1}/3): {e}")
+                            retry += 1
+                            time.sleep(0.5)
+                
+                # Skip processing if all API attempts failed
+                if response is None or response.status_code != 200:
+                    logger.warning(f"[{provider}][{image_id}] All API call attempts failed or returned error, continuing with empty response")
+                    # Create an empty success response to allow processing to continue
+                    response = type('obj', (object,), {
+                        'status_code': 500,
+                        'content': b'',
+                        'json': lambda: {'tracks': []},
+                    })
+                    
                 # Process the response
                 tracking_data = process_response(response, tracking_data)
                 logger.info(f"[{provider}][{image_id}] Vehicle count: {tracking_data['vehicle_count']}. Person count: {tracking_data['person_count']}.")

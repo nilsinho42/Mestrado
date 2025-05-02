@@ -674,7 +674,7 @@ class EdgeDetector():
         for retry in range(self.max_retries):
             try:
                 # Make request to edge server
-                if retry > 0:
+                if retry > 1:
                     logger.info(f"Retry {retry}/{self.max_retries} for edge detection request")
                     
                 logger.info(f"Sending detection request to edge server: {self.api_endpoint}")
