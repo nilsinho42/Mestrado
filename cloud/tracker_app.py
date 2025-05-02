@@ -14,6 +14,7 @@ Key features:
 - Timeouts and error handling for reliable operation
 
 Requirements:
+- Python 3.11
 - ultralytics
 - fastapi
 - opencv-python
@@ -45,9 +46,6 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)),
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# Path to custom tracker config
-TRACKER_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "tracker_config.yaml")
 
 # Create FastAPI app
 app = FastAPI(
@@ -436,4 +434,4 @@ async def healthcheck():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
-    uvicorn.run("tracker_app_yolo:app", host="0.0.0.0", port=port, log_level="info") 
+    uvicorn.run("tracker_app:app", host="0.0.0.0", port=port, log_level="info") 
