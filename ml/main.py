@@ -144,7 +144,7 @@ def process_response(response: requests.Response, tracking_data: dict) -> dict:
         class_name = track.get('class_name', '').lower()
         
         # Get the box dimensions
-        box = track.get('box', [0, 0, 0, 0])
+        box = track.get('bbox', [0, 0, 0, 0])
         
         # Calculate box area (width * height)
         # For [x1, y1, x2, y2] format
