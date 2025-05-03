@@ -1,4 +1,15 @@
 version: 1.0
-runtime: container
+runtime: python311
+
 build:
-  dockerfilePath: Dockerfile
+  commands:
+    build:
+      - echo "Skipping build, using run-time install"
+      
+run:
+  runtime-version: 3.11
+  pre-run:  
+    - pip3 install --no-cache-dir -r requirements.txt
+  command: python3 -m uvicorn tracker_app:app --host 0.0.0.0 --port 8080
+  network:
+    port: 8080
