@@ -2,10 +2,11 @@ version: 1.0
 runtime: python311
 
 build:
+  pre-build:
+    - yum install -y mesa-libGL glib2
   commands:
     build:
-      - echo "Skipping build, using run-time install"
-      
+      - echo "Skipping build, using runtime install"      
 run:
   runtime-version: 3.11
   pre-run:  
