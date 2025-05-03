@@ -1,50 +1,16 @@
 import numpy as np
 import logging
-import time
-import cv2
-import scipy.linalg
-from scipy.optimize import linear_sum_assignment
+from typing import Dict, Any, List, Optional
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def extract_color_features(image, bbox):
-    """Extract color histogram features from object patch."""
-    x1, y1, x2, y2 = map(int, bbox)
-    
-    # Ensure valid coordinates
-    x1 = max(0, x1)
-    y1 = max(0, y1)
-    x2 = min(image.shape[1], x2)
-    y2 = min(image.shape[0], y2)
-    
-    if x2 <= x1 or y2 <= y1:
-        # Invalid bbox, return empty features
-        return np.zeros(48, dtype=np.float32)
-    
-    # Extract the patch
-    patch = image[y1:y2, x1:x2]
-    
-    # Convert to HSV color space
-    try:
-        hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
-    except cv2.error:
-        # Handle potential errors (e.g., empty patch)
-        return np.zeros(48, dtype=np.float32)
-    
-    # Calculate histograms for each channel
-    h_hist = cv2.calcHist([hsv], [0], None, [16], [0, 180])
-    s_hist = cv2.calcHist([hsv], [1], None, [16], [0, 256])
-    v_hist = cv2.calcHist([hsv], [2], None, [16], [0, 256])
-    
-    # Normalize histograms
-    h_hist = cv2.normalize(h_hist, h_hist, 0, 1, cv2.NORM_MINMAX).flatten()
-    s_hist = cv2.normalize(s_hist, s_hist, 0, 1, cv2.NORM_MINMAX).flatten()
-    v_hist = cv2.normalize(v_hist, v_hist, 0, 1, cv2.NORM_MINMAX).flatten()
-    
-    # Concatenate into a feature vector
-    return np.concatenate([h_hist, s_hist, v_hist])
+try:
+    from ultralytics import YOLO
+except ImportError:
+    logger.error("Ultralytics package not found. Please install with 'pip install ultralytics'")
+    raise
 
 class Detection:
     """
@@ -83,426 +49,164 @@ class Detection:
         ret[2] /= ret[3]
         return ret
 
-class KalmanFilter:
+class YOLOTracker:
     """
-    A simple Kalman filter for tracking bounding boxes in image space.
+    YOLO-based tracker implementation that follows the same interface as DeepSORTTracker.
+    This allows for drop-in replacement of DeepSORT with YOLO's tracking capabilities.
     """
-    def __init__(self):
-        ndim, dt = 4, 1.
+    def __init__(self, model_path="yolo11n.pt", max_age=70, n_init=5, conf=0.5, use_features=False, max_iou_distance=0.7):
+        """
+        Initialize the YOLO tracker.
         
-        # Create Kalman filter model matrices.
-        self._motion_mat = np.eye(2 * ndim, 2 * ndim)
-        for i in range(ndim):
-            self._motion_mat[i, ndim + i] = dt
-        
-        self._update_mat = np.eye(ndim, 2 * ndim)
-        
-        # Motion and observation uncertainty are chosen relative to the current
-        # state estimate. These weights control the amount of uncertainty in
-        # the model.
-        self._std_weight_position = 1. / 20
-        self._std_weight_velocity = 1. / 160
-
-    def initiate(self, measurement):
-        """Create track from unassociated measurement."""
-        mean_pos = measurement
-        mean_vel = np.zeros_like(mean_pos)
-        mean = np.r_[mean_pos, mean_vel]
-        
-        std = [
-            2 * self._std_weight_position * measurement[3],
-            2 * self._std_weight_position * measurement[3],
-            1e-2,
-            2 * self._std_weight_position * measurement[3],
-            10 * self._std_weight_velocity * measurement[3],
-            10 * self._std_weight_velocity * measurement[3],
-            1e-5,
-            10 * self._std_weight_velocity * measurement[3]
-        ]
-        covariance = np.diag(np.square(std))
-        return mean, covariance
-
-    def predict(self, mean, covariance):
-        """Run Kalman filter prediction step."""
-        std_pos = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
-            1e-2,
-            self._std_weight_position * mean[3]
-        ]
-        std_vel = [
-            self._std_weight_velocity * mean[3],
-            self._std_weight_velocity * mean[3],
-            1e-5,
-            self._std_weight_velocity * mean[3]
-        ]
-        motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))
-        
-        # x' = F·x
-        mean = np.dot(self._motion_mat, mean)
-        # P' = F·P·F' + Q
-        covariance = np.linalg.multi_dot((
-            self._motion_mat, covariance, self._motion_mat.T)) + motion_cov
-            
-        return mean, covariance
-
-    def project(self, mean, covariance):
-        """Project state distribution to measurement space."""
-        std = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
-            1e-1,
-            self._std_weight_position * mean[3]
-        ]
-        innovation_cov = np.diag(np.square(std))
-        
-        # y = H·x
-        mean = np.dot(self._update_mat, mean)
-        # S = H·P·H' + R
-        covariance = np.linalg.multi_dot((
-            self._update_mat, covariance, self._update_mat.T)) + innovation_cov
-            
-        return mean, covariance
-
-    def update(self, mean, covariance, measurement):
-        """Run Kalman filter correction step."""
-        projected_mean, projected_cov = self.project(mean, covariance)
-        
-        # Compute Kalman gain: K = PH'(S)^-1
-        chol_factor, lower = scipy.linalg.cho_factor(
-            projected_cov, lower=True, check_finite=False)
-        kalman_gain = scipy.linalg.cho_solve(
-            (chol_factor, lower), np.dot(covariance, self._update_mat.T).T,
-            check_finite=False).T
-        
-        # y = z - Hx (innovation)
-        innovation = measurement - projected_mean
-        
-        # x' = x + Ky (new state)
-        new_mean = mean + np.dot(kalman_gain, innovation)
-        
-        # P' = P - KHP (new covariance)
-        new_covariance = covariance - np.linalg.multi_dot((
-            kalman_gain, projected_cov, kalman_gain.T))
-            
-        return new_mean, new_covariance
-
-class Track:
-    """
-    A track class for holding a single tracked object state.
-    """
-    def __init__(self, mean, covariance, track_id, class_id, class_name, confidence, n_init, max_age=70, features=None):
-        self.mean = mean
-        self.covariance = covariance
-        self.track_id = track_id
-        self.class_id = class_id
-        self.class_name = class_name
-        self.confidence = confidence
-        self.hits = 1
-        self.age = 1
-        self.time_since_update = 0
-        self.state = 1  # tentative
-        self._n_init = n_init
-        self._max_age = max_age
-        self.features = features
-
-    def to_tlwh(self):
-        """Get current position in bounding box format `(top left x, top left y, width, height)`."""
-        ret = self.mean[:4].copy()
-        ret[2] *= ret[3]
-        ret[:2] -= ret[2:] / 2
-        return ret
-
-    def to_tlbr(self):
-        """Get current position in bounding box format `(min x, min y, max x, max y)`."""
-        ret = self.to_tlwh()
-        ret[2:] = ret[:2] + ret[2:]
-        return ret
-
-    def predict(self, kf):
-        """Propagate the state distribution to the current time step using a Kalman filter prediction step."""
-        self.mean, self.covariance = kf.predict(self.mean, self.covariance)
-        self.age += 1
-        self.time_since_update += 1
-
-    def update(self, kf, detection):
-        """Perform Kalman filter measurement update step and update the feature cache."""
-        self.mean, self.covariance = kf.update(
-            self.mean, self.covariance, detection.to_xyah())
-        self.confidence = detection.confidence
-        self.hits += 1
-        self.time_since_update = 0
-        if self.state == 1 and self.hits >= self._n_init:
-            self.state = 2  # confirmed
-        # Update features if available
-        if hasattr(detection, 'features') and detection.features is not None:
-            self.features = detection.features
-
-    def mark_missed(self):
-        """Mark this track as missed (no association at the current time step)."""
-        if self.state == 1:
-            self.state = 3  # deleted
-        elif self.time_since_update > self._max_age:
-            self.state = 3  # deleted
-
-    def is_tentative(self):
-        """Returns True if this track is tentative (unconfirmed)."""
-        return self.state == 1
-
-    def is_confirmed(self):
-        """Returns True if this track is confirmed."""
-        return self.state == 2
-
-    def is_deleted(self):
-        """Returns True if this track is deleted."""
-        return self.state == 3
-
-class DeepSORTTracker:
-    """
-    DeepSORT tracker implementation.
-    """
-    def __init__(self, max_iou_distance=0.7, max_age=70, n_init=5, use_features=True):
-        self.max_iou_distance = max_iou_distance
+        Args:
+            model_path: Path to the YOLO model weights
+            max_age: Maximum number of frames to keep a track alive without matching detections
+            n_init: Number of consecutive frames a detection should appear to start a new track
+            conf: Confidence threshold for detections
+            use_features: Flag to use appearance features (not used in YOLO tracking)
+            max_iou_distance: Maximum IoU distance for track association (not used in YOLO tracking)
+        """
+        # Save parameters for compatibility with DeepSORT interface
         self.max_age = max_age
         self.n_init = n_init
+        self.max_iou_distance = max_iou_distance
         self.use_features = use_features
-        self.feature_weight = 0.3  # Weight for feature similarity vs IoU
+        self.conf = conf
+        self.model_path = model_path
         
-        self.kf = KalmanFilter()
-        self.tracks = []
-        self._next_id = 1
+        # Load the YOLO model
+        try:
+            self.model = YOLO(self.model_path)
+            logger.info(f"Loaded YOLO model: {self.model_path}")
+        except Exception as e:
+            logger.error(f"Failed to load YOLO model: {e}")
+            raise
+            
+        # Initialize counters for metrics
         self.vehicle_count = 0
         self.person_count = 0
         self.tracked_ids = {
             'vehicle': set(),
             'person': set()
         }
-
-    def predict(self):
-        """Propagate track state distributions one time step forward."""
-        for track in self.tracks:
-            track.predict(self.kf)
-
-    def update(self, detections, frame=None):
-        """
-        Perform measurement update and track management.
         
-        Args:
-            detections: List of detections (dict or Detection objects)
-            frame: Optional frame for feature extraction
-            
-        Returns:
-            Tracks after update
-        """
-        # Convert dict detections to Detection objects if needed
-        detection_objects = []
-        for det in detections:
-            if isinstance(det, dict):
-                detection_objects.append(Detection(
-                    bbox=det['bbox'],
-                    confidence=det['confidence'],
-                    class_id=det['class_id'],
-                    class_name=det['class_name'],
-                    features=det.get('features')
-                ))
-            else:
-                detection_objects = detections
-                break
-        
-        # Extract features if frame is provided
-        if self.use_features and frame is not None:
-            for i, det in enumerate(detection_objects):
-                if det.features is None:
-                    det.features = extract_color_features(frame, det.to_tlbr())
-                
-        # Predict step
-        self.predict()
-
-        # Run matching cascade
-        matches, unmatched_tracks, unmatched_detections = self._match(detection_objects)
-
-        # Update track set
-        for track_idx, detection_idx in matches:
-            self.tracks[track_idx].update(self.kf, detection_objects[detection_idx])
-            
-            # Update counters for metrics
-            self._update_counts(self.tracks[track_idx])
-            
-        for track_idx in unmatched_tracks:
-            self.tracks[track_idx].mark_missed()
-            
-        for detection_idx in unmatched_detections:
-            self._initiate_track(detection_objects[detection_idx])
-        
-        # Remove deleted tracks
-        self.tracks = [t for t in self.tracks if not t.is_deleted()]
-
-        return self.tracks
+        # Track management
+        self.tracks = []
+        self.current_tracks = []
+        self._next_id = 1  # For compatibility, even though YOLO assigns its own IDs
     
     def _is_vehicle(self, class_name):
         """Check if the class name represents a vehicle."""
-        vehicle_keywords = ['car', 'truck', 'bus', 'vehicle', 'automobile', 'van', 'suv', 'motorbike', 'bicycle']
-        return any(keyword in class_name.lower() for keyword in vehicle_keywords)
+        vehicle_classes = [
+            'car', 'truck', 'bus', 'vehicle', 'automobile', 'van', 'suv', 'motorbike', 'bicycle', 
+            'transportation', 'taxi', 'ambulance', 'police car', 'motorcycle',
+            'Car', 'Truck', 'Bus', 'Vehicle', 'Automobile', 'Van', 'SUV', 'Motorbike', 'Bicycle',
+            'Transportation', 'Taxi', 'Ambulance', 'Police Car', 'Motorcycle'
+        ]
+        return any(vehicle_class.lower() in class_name.lower() for vehicle_class in vehicle_classes)
         
     def _is_person(self, class_name):
         """Check if the class name represents a person."""
-        person_keywords = ['person', 'pedestrian', 'human', 'man', 'woman', 'child']
-        return any(keyword in class_name.lower() for keyword in person_keywords)
+        person_classes = [
+            'person', 'human', 'people', 'pedestrian', 'man', 'woman', 'child', 'baby',
+            'Person', 'Human', 'People', 'Pedestrian', 'Man', 'Woman', 'Child', 'Baby'
+        ]
+        return any(person_class.lower() in class_name.lower() for person_class in person_classes)
     
-    def _update_counts(self, track):
+    def _update_counts(self, track_id, class_name):
         """Update vehicle and person counts based on track class."""
-        if not track.is_confirmed():
-            return
-            
-        if self._is_vehicle(track.class_name):
-            if track.track_id not in self.tracked_ids['vehicle']:
-                self.tracked_ids['vehicle'].add(track.track_id)
+        if self._is_vehicle(class_name):
+            if track_id not in self.tracked_ids['vehicle']:
+                self.tracked_ids['vehicle'].add(track_id)
                 self.vehicle_count += 1
                 
-        elif self._is_person(track.class_name):
-            if track.track_id not in self.tracked_ids['person']:
-                self.tracked_ids['person'].add(track.track_id)
+        elif self._is_person(class_name):
+            if track_id not in self.tracked_ids['person']:
+                self.tracked_ids['person'].add(track_id)
                 self.person_count += 1
-
-    def _match(self, detections):
-        """Match tracks and detections using both IoU and features."""
-        confirmed_tracks = [
-            i for i, t in enumerate(self.tracks) if t.is_confirmed()]
-        unconfirmed_tracks = [
-            i for i, t in enumerate(self.tracks) if not t.is_confirmed()]
-
-        # Associate confirmed tracks
-        matches_a, unmatched_tracks_a, unmatched_detections = \
-            self._match_tracks_detections(detections, confirmed_tracks)
-
-        # Associate remaining tracks (unconfirmed) with remaining detections
-        matches_b, unmatched_tracks_b, unmatched_detections = \
-            self._match_tracks_detections(detections, unconfirmed_tracks, unmatched_detections)
-
-        matches = matches_a + matches_b
-        unmatched_tracks = list(unmatched_tracks_a) + list(unmatched_tracks_b)
-        
-        return matches, unmatched_tracks, unmatched_detections
     
-    def _match_tracks_detections(self, detections, track_indices, detection_indices=None):
-        """Match tracks and detections using both IoU and feature similarity."""
-        if detection_indices is None:
-            detection_indices = list(range(len(detections)))
+    def predict(self):
+        """
+        Stub for DeepSORT compatibility. YOLO prediction happens within the update method.
+        """
+        pass
+    
+    def update(self, detections, frame=None):
+        """
+        Perform tracking on an image with optional pre-computed detections.
+        This method performs both detection and tracking using YOLO's built-in tracker.
         
-        if len(track_indices) == 0 or len(detection_indices) == 0:
-            return [], track_indices, detection_indices
-        
-        # Compute IoU cost matrix
-        iou_cost_matrix = np.zeros((len(track_indices), len(detection_indices)))
-        for i, track_idx in enumerate(track_indices):
-            track_bbox = self.tracks[track_idx].to_tlwh()
-            for j, detection_idx in enumerate(detection_indices):
-                detection_bbox = detections[detection_idx].tlwh
-                iou_cost_matrix[i, j] = 1.0 - self._calculate_iou(track_bbox, detection_bbox)
-        
-        # Compute feature distance cost matrix if features are available
-        if self.use_features:
-            feature_cost_matrix = np.ones((len(track_indices), len(detection_indices)))
-            for i, track_idx in enumerate(track_indices):
-                if hasattr(self.tracks[track_idx], 'features') and self.tracks[track_idx].features is not None:
-                    track_features = self.tracks[track_idx].features
-                    for j, detection_idx in enumerate(detection_indices):
-                        if hasattr(detections[detection_idx], 'features') and detections[detection_idx].features is not None:
-                            detection_features = detections[detection_idx].features
-                            feature_cost_matrix[i, j] = self._feature_distance(track_features, detection_features)
+        Args:
+            detections: List of detections (dict or Detection objects) - ignored in favor of YOLO's detection
+            frame: Input frame for tracking
             
-            # Combine IoU and feature cost matrices
-            cost_matrix = (1.0 - self.feature_weight) * iou_cost_matrix + self.feature_weight * feature_cost_matrix
-        else:
-            cost_matrix = iou_cost_matrix
+        Returns:
+            A list of tracks
+        """
+        if frame is None:
+            logger.warning("No frame provided to YOLO tracker. Cannot perform tracking.")
+            return self.tracks
+        
+        # Run the tracker
+        try:
+            results = self.model.track(
+                source=frame,
+                persist=True,  # Maintain track IDs across frames
+                conf=self.conf,
+                verbose=False
+            )
             
-        # Add class name matching bonus
-        for i, track_idx in enumerate(track_indices):
-            for j, detection_idx in enumerate(detection_indices):
-                if self.tracks[track_idx].class_name == detections[detection_idx].class_name:
-                    cost_matrix[i, j] *= 0.9  # 10% bonus for same class
-        
-        # Apply maximum distance threshold
-        cost_matrix[cost_matrix > self.max_iou_distance] = float('inf')
-        
-        # Perform linear assignment
-        row_indices, col_indices = linear_sum_assignment(cost_matrix)
-        indices = np.column_stack((row_indices, col_indices))
-        
-        matches, unmatched_tracks, unmatched_detections = [], [], []
-        
-        for col, detection_idx in enumerate(detection_indices):
-            if col not in indices[:, 1]:
-                unmatched_detections.append(detection_indices[col])
-                
-        for row, track_idx in enumerate(track_indices):
-            if row not in indices[:, 0]:
-                unmatched_tracks.append(track_indices[row])
-                
-        for row, col in indices:
-            if cost_matrix[row, col] >= float('inf'):
-                unmatched_tracks.append(track_indices[row])
-                unmatched_detections.append(detection_indices[col])
-            else:
-                matches.append((track_indices[row], detection_indices[col]))
-                
-        return matches, unmatched_tracks, unmatched_detections
-
-    def _calculate_iou(self, bbox1, bbox2):
-        """Calculate IoU between two bounding boxes in tlwh format."""
-        # Convert to format x1, y1, x2, y2
-        bbox1_tlbr = np.array([bbox1[0], bbox1[1], bbox1[0] + bbox1[2], bbox1[1] + bbox1[3]])
-        bbox2_tlbr = np.array([bbox2[0], bbox2[1], bbox2[0] + bbox2[2], bbox2[1] + bbox2[3]])
-        
-        # Get coordinates of intersection
-        xi1 = max(bbox1_tlbr[0], bbox2_tlbr[0])
-        yi1 = max(bbox1_tlbr[1], bbox2_tlbr[1])
-        xi2 = min(bbox1_tlbr[2], bbox2_tlbr[2])
-        yi2 = min(bbox1_tlbr[3], bbox2_tlbr[3])
-        
-        # Calculate area of intersection
-        inter_width = max(0, xi2 - xi1)
-        inter_height = max(0, yi2 - yi1)
-        inter_area = inter_width * inter_height
-        
-        # Calculate areas of both bounding boxes
-        bbox1_area = bbox1[2] * bbox1[3]
-        bbox2_area = bbox2[2] * bbox2[3]
-        
-        # Calculate IoU
-        union_area = bbox1_area + bbox2_area - inter_area
-        if union_area <= 0:
-            return 0
-        return inter_area / union_area
-
-    def _initiate_track(self, detection):
-        """Initialize a new track from a detection."""
-        mean, covariance = self.kf.initiate(detection.to_xyah())
-        self.tracks.append(Track(
-            mean, covariance, self._next_id, detection.class_id,
-            detection.class_name, detection.confidence, self.n_init, 
-            max_age=self.max_age, features=detection.features))
-        
-        # Update counters for metrics
-        self._update_counts(self.tracks[-1])  # Update counts for the newly added track
-                
-        self._next_id += 1
-        
-    def _feature_distance(self, track_features, detection_features):
-        """Calculate cosine distance between feature vectors."""
-        if track_features is None or detection_features is None:
-            return 1.0  # Maximum distance
-        
-        # Normalize features if needed
-        if np.linalg.norm(track_features) > 0:
-            track_features = track_features / np.linalg.norm(track_features)
-        if np.linalg.norm(detection_features) > 0:
-            detection_features = detection_features / np.linalg.norm(detection_features)
+            # Extract tracks from results
+            self.tracks = []  # Reset tracks for this frame
             
-        # Calculate cosine similarity
-        similarity = np.dot(track_features, detection_features)
-        # Convert to distance (1 - similarity)
-        return max(0.0, 1.0 - similarity)
+            if results and len(results) > 0:
+                result = results[0]  # Get the first result
+                
+                # Check if tracking information is available
+                if hasattr(result, 'boxes') and hasattr(result.boxes, 'id') and result.boxes.id is not None:
+                    boxes = result.boxes.xyxy.cpu().numpy()  # Get boxes in xyxy format
+                    track_ids = result.boxes.id.int().cpu().numpy()  # Get track IDs
+                    confs = result.boxes.conf.cpu().numpy()  # Get confidences
+                    cls_ids = result.boxes.cls.int().cpu().numpy()  # Get class IDs
+                    
+                    # Get class names
+                    class_names = [result.names[c] for c in cls_ids]
+                    
+                    # Create track objects in format compatible with DeepSORT
+                    for i in range(len(track_ids)):
+                        track_id = int(track_ids[i])
+                        box = boxes[i].tolist()  # [x1, y1, x2, y2]
+                        confidence = float(confs[i])
+                        class_id = int(cls_ids[i])
+                        class_name = class_names[i]
+                        
+                        # Update counters
+                        self._update_counts(track_id, class_name)
+                        
+                        # Create Track-like object
+                        track = type('Track', (), {
+                            'track_id': track_id,
+                            'class_id': class_id,
+                            'class_name': class_name,
+                            'confidence': confidence,
+                            'bbox': box,
+                            'to_tlwh': lambda b=box: np.array([b[0], b[1], b[2] - b[0], b[3] - b[1]]),
+                            'to_tlbr': lambda b=box: np.array(b),
+                            'is_confirmed': lambda: True,
+                            'is_tentative': lambda: False,
+                            'is_deleted': lambda: False
+                        })
+                        
+                        self.tracks.append(track)
+            
+            # Save current tracks for reference
+            self.current_tracks = self.tracks
+            
+            return self.tracks
+            
+        except Exception as e:
+            logger.error(f"Error in YOLO tracking: {e}")
+            return self.current_tracks
         
     def get_results(self):
         """Get counts and other metrics."""
@@ -517,10 +221,13 @@ class DeepSORTTracker:
             }
         }
 
+# Alias DeepSORTTracker to YOLOTracker for backward compatibility
+DeepSORTTracker = YOLOTracker
+
 # Create a tracker function that matches the API of the AWS version
 def create_tracker(**kwargs):
-    """Create a DeepSORT tracker with the specified parameters."""
-    return DeepSORTTracker(**kwargs)
+    """Create a YOLO tracker with the specified parameters."""
+    return YOLOTracker(**kwargs)
 
 # For backward compatibility with AWS version
-Tracker = DeepSORTTracker 
+Tracker = YOLOTracker 

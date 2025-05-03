@@ -7,7 +7,6 @@ import numpy as np
 import cv2
 from flask import Flask, request, jsonify
 from pathlib import Path
-import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -26,7 +25,7 @@ app = Flask(__name__)
 
 # Initialize detector and tracker
 detector = YOLODetector(model_path="yolov11n.pt", confidence_threshold=0.50)
-tracker = DeepSORTTracker(max_iou_distance=0.9, max_age=70, n_init=5, use_features=True)
+tracker = DeepSORTTracker(model_path="yolov11n.pt", max_iou_distance=0.9, max_age=70, n_init=5)
 
 # Store active tracking sessions
 tracking_sessions = {}
@@ -92,7 +91,7 @@ def track_objects():
         # Create tracking session if it doesn't exist
         if video_id not in tracking_sessions:
             tracking_sessions[video_id] = {
-                "tracker": DeepSORTTracker(max_iou_distance=0.9, max_age=70, n_init=5, use_features=True),
+                "tracker": DeepSORTTracker(model_path="yolov11n.pt", max_iou_distance=0.9, max_age=70, n_init=5),
                 "frames_processed": 0,
                 "last_update": time.time()
             }
@@ -113,73 +112,23 @@ def track_objects():
             logger.error(f"Error decoding image: {e}")
             return jsonify({"error": f"Invalid image format: {str(e)}"}), 400
         
-        # Use provided detections or run detector if not provided
-        detections = []
-        if 'detections' in data and data['detections']:
-            # Convert provided detections to the format expected by the tracker
-            for det in data['detections']:
-                if 'box' not in det:
-                    logger.warning(f"Detection missing 'box' field: {det}")
-                    continue
-                    
-                box = det['box']
-                
-                # Ensure box is properly formatted
-                if not isinstance(box, list) or len(box) != 4:
-                    logger.warning(f"Invalid box format: {box}, expected 4 values")
-                    continue
-                
-                # Ensure box is in [x1, y1, x2, y2] format
-                if len(box) == 4:
-                    # Check if it appears to be in [x, y, w, h] format
-                    if box[2] < box[0] or box[3] < box[1]:  # width/height are smaller than position
-                        # Convert [x, y, w, h] to [x1, y1, x2, y2]
-                        bbox = [box[0], box[1], box[0] + box[2], box[1] + box[3]]
-                        logger.info(f"Converted [x,y,w,h] to [x1,y1,x2,y2]: {box} → {bbox}")
-                    else:
-                        bbox = box
-                else:
-                    logger.warning(f"Unknown box format: {box}")
-                    continue
-                
-                # Validate box values
-                if any(not isinstance(coord, (int, float)) for coord in bbox):
-                    logger.warning(f"Box contains non-numeric values: {bbox}")
-                    continue
-                
-                if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
-                    logger.warning(f"Invalid box dimensions (x2<=x1 or y2<=y1): {bbox}")
-                    continue
-                    
-                # Create detection object
-                detections.append({
-                    'bbox': bbox,  # [x1, y1, x2, y2] format
-                    'confidence': det.get('confidence', 0.5),
-                    'class_id': det.get('class_id', 0),
-                    'class_name': det.get('class_name', 'unknown')
-                })
-        else:
-            # Run detector on the image
-            detections = detector.process_image(img)
-        
-        # Update tracker
+        # We ignore provided detections in YOLO mode since YOLO does its own detection
+        # Track objects using the session tracker (which now uses YOLO)
         session = tracking_sessions[video_id]
         session_tracker = session["tracker"]
         
-        # Track objects
-        tracks = session_tracker.update(detections, frame=img)
+        # Track objects - with YOLO we only need to pass the frame
+        tracks = session_tracker.update([], frame=img)
         
         # Extract results
         tracks_result = []
         for track in tracks:
-            if not track.is_confirmed():
-                continue
-                
+            # YOLOTracker returns tracks that are already confirmed
             tracks_result.append({
                 'track_id': track.track_id,
                 'class_id': track.class_id,
                 'class_name': track.class_name,
-                'box': track.to_tlbr().tolist(),
+                'box': track.to_tlbr() if callable(track.to_tlbr) else track.bbox,
                 'confidence': track.confidence
             })
         
