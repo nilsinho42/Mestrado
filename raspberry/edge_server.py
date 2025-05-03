@@ -123,12 +123,12 @@ def track_objects():
         # Extract results
         tracks_result = []
         for track in tracks:
-            # YOLOTracker returns tracks that are already confirmed
+            # Just use the track object as-is since it's simplified
             tracks_result.append({
                 'track_id': track.track_id,
                 'class_id': track.class_id,
                 'class_name': track.class_name,
-                'box': track.to_tlbr() if callable(track.to_tlbr) else track.bbox,
+                'box': track.bbox,
                 'confidence': track.confidence
             })
         

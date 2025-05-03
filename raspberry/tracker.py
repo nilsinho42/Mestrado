@@ -93,7 +93,6 @@ class YOLOTracker:
         # Track management
         self.tracks = []
         self.current_tracks = []
-        self._next_id = 1  # For compatibility, even though YOLO assigns its own IDs
     
     def _is_vehicle(self, class_name):
         """Check if the class name represents a vehicle."""
@@ -172,7 +171,7 @@ class YOLOTracker:
                     # Get class names
                     class_names = [result.names[c] for c in cls_ids]
                     
-                    # Create track objects in format compatible with DeepSORT
+                    # Create simplified track objects with only what's needed
                     for i in range(len(track_ids)):
                         track_id = int(track_ids[i])
                         box = boxes[i].tolist()  # [x1, y1, x2, y2]
@@ -183,18 +182,13 @@ class YOLOTracker:
                         # Update counters
                         self._update_counts(track_id, class_name)
                         
-                        # Create Track-like object
+                        # Create a simple Track object with only the needed attributes
                         track = type('Track', (), {
                             'track_id': track_id,
                             'class_id': class_id,
                             'class_name': class_name,
                             'confidence': confidence,
-                            'bbox': box,
-                            'to_tlwh': lambda b=box: np.array([b[0], b[1], b[2] - b[0], b[3] - b[1]]),
-                            'to_tlbr': lambda b=box: np.array(b),
-                            'is_confirmed': lambda: True,
-                            'is_tentative': lambda: False,
-                            'is_deleted': lambda: False
+                            'bbox': box  # Already converted to a list
                         })
                         
                         self.tracks.append(track)

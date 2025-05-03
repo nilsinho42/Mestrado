@@ -241,9 +241,9 @@ class YOLOTracker:
                     # Create track objects
                     for i in range(len(track_ids)):
                         track_id = int(track_ids[i])
-                        box = boxes[i].tolist()  # [x1, y1, x2, y2]
-                        confidence = float(confs[i])
-                        class_id = int(cls_ids[i])
+                        box = boxes[i].tolist()  # Convert to list for JSON serialization
+                        confidence = float(confs[i])  # Convert to native float
+                        class_id = int(cls_ids[i])   # Convert to native int
                         class_name = class_names[i]
                         
                         # Update counters
