@@ -98,6 +98,44 @@ def convert_detection(detection: Detection, provider: str) -> dict:
 
     return result
 
+def standardize_class_name(class_name: str) -> str:
+    """
+    Standardize detection class names to consistent categories.
+    Returns 'vehicle', 'person', or None if it doesn't match either category.
+    
+    Args:
+        class_name: The original class name from the detector
+        
+    Returns:
+        Standardized class name ('vehicle', 'person') or None if no match
+    """
+    if not class_name:
+        return None
+        
+    class_name_lower = class_name.lower()
+    
+    # Vehicle classes
+    vehicle_classes = [
+        'car', 'vehicle', 'automobile', 'truck', 'van', 'bus', 'motorcycle', 'bicycle', 
+        'transportation', 'taxi', 'ambulance', 'police car', 'suv', 'motorbike'
+    ]
+    
+    # Person classes
+    person_classes = [
+        'person', 'human', 'people', 'pedestrian', 'man', 'woman', 'child', 'baby'
+    ]
+    
+    # Check for vehicle match
+    if any(vc in class_name_lower for vc in vehicle_classes):
+        return 'vehicle'
+        
+    # Check for person match
+    if any(pc in class_name_lower for pc in person_classes):
+        return 'person'
+        
+    # No match to our categories
+    return None
+
 def process_response(response: requests.Response, tracking_data: dict) -> dict:
     """Process the response from the tracker_app."""
     # Check if response was successful and has content
@@ -120,31 +158,17 @@ def process_response(response: requests.Response, tracking_data: dict) -> dict:
         logger.info(f"Invalid tracks format: {resp_data['tracks']}")
         return tracking_data
 
-    # Define classes based on the same patterns used in models.py
-    # Combine all classes from different detectors for maximum compatibility
-    people_classes = [
-        'person', 'human', 'people', 'pedestrian', 'man', 'woman', 'child', 'baby',
-        'Person', 'Human', 'People', 'Pedestrian', 'Man', 'Woman', 'Child', 'Baby'
-    ]
-    
-    vehicle_classes = [
-        'car', 'vehicle', 'automobile', 'truck', 'van', 'bus', 'motorcycle', 'bicycle', 
-        'transportation', 'taxi', 'ambulance', 'police car', 'suv', 'motorbike',
-        'Car', 'Vehicle', 'Automobile', 'Truck', 'Van', 'Bus', 'Motorcycle', 'Bicycle',
-        'Transportation', 'Taxi', 'Ambulance', 'Police Car', 'SUV', 'Motorbike'
-    ]
-
     # Set a minimum box size threshold (as a fraction of image dimensions)
     # Boxes smaller than this percentage of the frame will be ignored
-    min_box_size_threshold = 0.05  # 1% of frame size
+    min_box_size_threshold = 0.10  # 1% of frame size
 
     tracks = resp_data.get('tracks', [])
     for track in tracks:
         track_id = track.get('track_id')
-        class_name = track.get('class_name', '').lower()
+        class_name = track.get('class_name', '')
         
         # Get the box dimensions
-        box = track.get('bbox')
+        box = track.get('box')
         
         # Calculate box area (width * height)
         # For [x1, y1, x2, y2] format
@@ -162,16 +186,12 @@ def process_response(response: requests.Response, tracking_data: dict) -> dict:
         if box_size < min_box_size_threshold:
             continue
         
-        # Check if this is a vehicle using the combined class list
-        class_name_lower = class_name.lower()
-        is_vehicle = any(vc.lower() in class_name_lower for vc in vehicle_classes)
-        is_person = any(pc.lower() in class_name_lower for pc in people_classes)
-        
-        if is_vehicle:
+        # The class_name should already be standardized, so we can do direct comparison
+        if class_name == 'vehicle':
             if track_id not in tracking_data['tracked_ids']['vehicle']:
                 tracking_data['tracked_ids']['vehicle'].add(track_id)
                 tracking_data['vehicle_count'] += 1
-        elif is_person:
+        elif class_name == 'person':
             if track_id not in tracking_data['tracked_ids']['person']:
                 tracking_data['tracked_ids']['person'].add(track_id)
                 tracking_data['person_count'] += 1
@@ -246,7 +266,7 @@ class VideoPipeline:
         
         # Set up tracker endpoints
         self.azure_deepsort_tracker = os.getenv("AZURE_DEEPSORT_ENDPOINT")
-        self.aws_deepsort_tracker = os.getenv("AWS_FARGATE_ENDPOINT", "https://avpfh7vmvc.us-east-2.awsapprunner.com")
+        self.aws_deepsort_tracker = os.getenv("AWS_FARGATE_ENDPOINT")
         self.gcp_deepsort_tracker = os.getenv("GCP_DEEPSORT_TRACKER")   
         self.edge_deepsort_tracker = os.getenv("EDGE_DEEPSORT_ENDPOINT")
         
@@ -287,7 +307,7 @@ class VideoPipeline:
         _detectors["edge"] = edge_detector  # Add to global dict
         logger.info("Edge detector initialized for Raspberry Pi processing")
         
-    def process_video(self, video_path, job_id, providers=['edge'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
+    def process_video(self, video_path, job_id, providers=['azure'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
         """
         Process a video using detection methods and return results.
         
@@ -375,7 +395,24 @@ class VideoPipeline:
                 frame_results.append(result)
 
                 if detections:
-                    detections = [Detection(**d, frame_number=frame_number) for d in detections]
+                    # Create Detection objects and standardize class names
+                    standardized_detections = []
+                    for d in detections:
+                        # Standardize the class name
+                        std_class_name = standardize_class_name(d.get('class_name', ''))
+                        
+                        # Only keep detections that match our standard categories
+                        if std_class_name:
+                            # Update the detection with standardized class name
+                            d['class_name'] = std_class_name
+                            standardized_detections.append(Detection(**d, frame_number=frame_number))
+                    
+                    # Replace original detections with standardized ones
+                    detections = standardized_detections
+                    
+                    # Skip if no valid detections remain after standardization
+                    if not detections:
+                        continue
                 else:
                     continue 
 
@@ -393,7 +430,8 @@ class VideoPipeline:
                         "image": encoded_image,
                         "frame_idx": frame_number,
                         "detections": [convert_detection(det, provider) for det in detections],
-                        "video_id": job_id
+                        "video_id": job_id,
+                        "provider": provider
                     }
                     
                     retry = 0
@@ -422,7 +460,8 @@ class VideoPipeline:
                         "image": encoded_image,
                         "frame_idx": frame_number,
                         "detections": [convert_detection(det, provider) for det in detections],
-                        "video_id": job_id
+                        "video_id": job_id,
+                        "provider": provider
                     }
                     
                     retry = 0
@@ -451,7 +490,8 @@ class VideoPipeline:
                         "image": encoded_image,
                         "frame_idx": frame_number,
                         "detections": [convert_detection(det, provider) for det in detections],
-                        "video_id": job_id
+                        "video_id": job_id,
+                        "provider": provider
                     }
                     
                     retry = 0
@@ -480,7 +520,8 @@ class VideoPipeline:
                         "image": encoded_image,
                         "frame_idx": frame_number,
                         "detections": [convert_detection(det, provider) for det in detections],
-                        "video_id": job_id
+                        "video_id": job_id,
+                        "provider": provider
                     }
                     
                     retry = 0

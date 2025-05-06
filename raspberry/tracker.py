@@ -188,7 +188,7 @@ class YOLOTracker:
                             'class_id': class_id,
                             'class_name': class_name,
                             'confidence': confidence,
-                            'bbox': box  # Already converted to a list
+                            'box': box  # Already converted to a list
                         })
                         
                         self.tracks.append(track)
