@@ -6,4 +6,10 @@ torch==2.1.1
 torchvision==0.16.1
 ultralytics==8.3.2  
 Pillow==9.5.0
-requests==2.31.0 
+requests==2.31.0
+deep-sort-realtime==1.3.2
+torchreid>=0.2.5
+lap>=0.4.0  # Required for object tracking
+lapx>=0.5.2  # Required for object tracking 
+tensorboard>=2.12.0  # Required by torchreid
+gdown>=4.7.1  # Required for torchreid to download models 

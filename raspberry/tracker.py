@@ -6,11 +6,8 @@ from typing import Dict, Any, List, Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-try:
-    from ultralytics import YOLO
-except ImportError:
-    logger.error("Ultralytics package not found. Please install with 'pip install ultralytics'")
-    raise
+from ultralytics import YOLO
+from deep_sort_realtime.deepsort_tracker import DeepSort
 
 class Detection:
     """
@@ -49,24 +46,23 @@ class Detection:
         ret[2] /= ret[3]
         return ret
 
-class YOLOTracker:
+class DeepSortTracker:
     """
-    YOLO-based tracker implementation that follows the same interface as DeepSORTTracker.
-    This allows for drop-in replacement of DeepSORT with YOLO's tracking capabilities.
+    DeepSORT tracker implementation using deep_sort_realtime package.
     """
-    def __init__(self, model_path="yolo11n.pt", max_age=70, n_init=5, conf=0.5, use_features=False, max_iou_distance=0.7):
+    def __init__(self, model_path="yolo11n.pt", max_age=70, n_init=5, conf=0.5, use_features=True, max_iou_distance=0.7):
         """
-        Initialize the YOLO tracker.
+        Initialize the DeepSORT tracker.
         
         Args:
-            model_path: Path to the YOLO model weights
+            model_path: Path to the YOLO model weights for detection
             max_age: Maximum number of frames to keep a track alive without matching detections
             n_init: Number of consecutive frames a detection should appear to start a new track
             conf: Confidence threshold for detections
-            use_features: Flag to use appearance features (not used in YOLO tracking)
-            max_iou_distance: Maximum IoU distance for track association (not used in YOLO tracking)
+            use_features: Flag to use appearance features
+            max_iou_distance: Maximum IoU distance for track association
         """
-        # Save parameters for compatibility with DeepSORT interface
+        # Save parameters
         self.max_age = max_age
         self.n_init = n_init
         self.max_iou_distance = max_iou_distance
@@ -74,13 +70,10 @@ class YOLOTracker:
         self.conf = conf
         self.model_path = model_path
         
-        # Load the YOLO model
-        try:
-            self.model = YOLO(self.model_path)
-            logger.info(f"Loaded YOLO model: {self.model_path}")
-        except Exception as e:
-            logger.error(f"Failed to load YOLO model: {e}")
-            raise
+        # Initialize the DeepSORT trackers for vehicles and people
+        self.vehicle_tracker = DeepSort(embedder_gpu=False, half=False, bgr=True, n_init=n_init, max_age=max_age)
+        # For people tracking, use a specialized embedder and longer max_age
+        self.people_tracker = DeepSort(embedder='torchreid', embedder_gpu=False, half=False, bgr=True, n_init=15, max_age=150)
             
         # Initialize counters for metrics
         self.vehicle_count = 0
@@ -94,114 +87,125 @@ class YOLOTracker:
         self.tracks = []
         self.current_tracks = []
     
-    def _is_vehicle(self, class_name):
-        """Check if the class name represents a vehicle."""
-        vehicle_classes = [
-            'car', 'truck', 'bus', 'vehicle', 'automobile', 'van', 'suv', 'motorbike', 'bicycle', 
-            'transportation', 'taxi', 'ambulance', 'police car', 'motorcycle',
-            'Car', 'Truck', 'Bus', 'Vehicle', 'Automobile', 'Van', 'SUV', 'Motorbike', 'Bicycle',
-            'Transportation', 'Taxi', 'Ambulance', 'Police Car', 'Motorcycle'
-        ]
-        return any(vehicle_class.lower() in class_name.lower() for vehicle_class in vehicle_classes)
+    # def _is_vehicle(self, class_name):
+    #     """Check if the class name represents a vehicle."""
+    #     vehicle_classes = [
+    #         'car', 'truck', 'bus', 'vehicle', 'automobile', 'van', 'suv', 'motorbike', 'bicycle', 
+    #         'transportation', 'taxi', 'ambulance', 'police car', 'motorcycle',
+    #         'Car', 'Truck', 'Bus', 'Vehicle', 'Automobile', 'Van', 'SUV', 'Motorbike', 'Bicycle',
+    #         'Transportation', 'Taxi', 'Ambulance', 'Police Car', 'Motorcycle'
+    #     ]
+    #     return any(vehicle_class.lower() in class_name.lower() for vehicle_class in vehicle_classes)
         
-    def _is_person(self, class_name):
-        """Check if the class name represents a person."""
-        person_classes = [
-            'person', 'human', 'people', 'pedestrian', 'man', 'woman', 'child', 'baby',
-            'Person', 'Human', 'People', 'Pedestrian', 'Man', 'Woman', 'Child', 'Baby'
-        ]
-        return any(person_class.lower() in class_name.lower() for person_class in person_classes)
+    # def _is_person(self, class_name):
+    #     """Check if the class name represents a person."""
+    #     person_classes = [
+    #         'person', 'human', 'people', 'pedestrian', 'man', 'woman', 'child', 'baby',
+    #         'Person', 'Human', 'People', 'Pedestrian', 'Man', 'Woman', 'Child', 'Baby'
+    #     ]
+    #     return any(person_class.lower() in class_name.lower() for person_class in person_classes)
     
     def _update_counts(self, track_id, class_name):
         """Update vehicle and person counts based on track class."""
-        if self._is_vehicle(class_name):
+        if class_name.lower() == 'vehicle':
             if track_id not in self.tracked_ids['vehicle']:
                 self.tracked_ids['vehicle'].add(track_id)
                 self.vehicle_count += 1
-                
-        elif self._is_person(class_name):
+        else:
             if track_id not in self.tracked_ids['person']:
                 self.tracked_ids['person'].add(track_id)
                 self.person_count += 1
     
-    def predict(self):
-        """
-        Stub for DeepSORT compatibility. YOLO prediction happens within the update method.
-        """
-        pass
-    
     def update(self, detections, frame=None):
         """
-        Perform tracking on an image with optional pre-computed detections.
-        This method performs both detection and tracking using YOLO's built-in tracker.
+        Perform detection and tracking on an image.
         
         Args:
-            detections: List of detections (dict or Detection objects) - ignored in favor of YOLO's detection
-            frame: Input frame for tracking
+            detections: List of detections (dict or Detection objects) - can be empty or None
+            frame: Input frame for tracking (required)
             
         Returns:
             A list of tracks
         """
         if frame is None:
-            logger.warning("No frame provided to YOLO tracker. Cannot perform tracking.")
+            logger.warning("No frame provided to DeepSORT tracker. Cannot perform tracking.")
             return self.tracks
         
-        # Run the tracker
-        try:
-            results = self.model.track(
-                source=frame,
-                persist=True,  # Maintain track IDs across frames
-                conf=self.conf,
-                verbose=False
-            )
-            
-            # Extract tracks from results
-            self.tracks = []  # Reset tracks for this frame
-            
-            if results and len(results) > 0:
-                result = results[0]  # Get the first result
+        # Return early if no detections
+        if not detections:
+            return self.tracks
+        
+        # Process detections with DeepSORT trackers
+        vehicle_detections = []
+        people_detections = []
+        
+        # Separate detections into vehicle and people
+        for det in detections:
+            x1, y1, x2, y2 = det.get('box')
+            box_xywh = [x1, y1, x2 - x1, y2 - y1]
+            # Handle both formats: tuple from YOLO conversion or dict from external source
+            # Add to appropriate tracker list
+            confidence = det.get('confidence')
+            class_name = det.get('class_name')
+
+            if det.get('class_name') == 'vehicle':
+                vehicle_detections.append((box_xywh, confidence, class_name))
+            else:
+                people_detections.append((box_xywh, confidence, class_name))
+        
+        all_tracks = []
+        
+        # Process vehicle detections
+        vehicle_tracks = []
+        if vehicle_detections:
+            try:
+                vehicle_tracks = self.vehicle_tracker.update_tracks(vehicle_detections, frame=frame)
+            except Exception as e:
+                logger.error(f"Error during vehicle tracker update: {e}")
+        
+        # Process people detections
+        people_tracks = []
+        if people_detections:
+            try:
+                people_tracks = self.people_tracker.update_tracks(people_detections, frame=frame)
+            except Exception as e:
+                logger.error(f"Error during people tracker update: {e}")
+        
+        # Combine all tracks
+        all_tracks = vehicle_tracks + people_tracks
+        
+        # Convert DeepSort Track objects into a list of tracks
+        self.tracks = []
+        for track in all_tracks:
+            if not track.is_confirmed():
+                continue
                 
-                # Check if tracking information is available
-                if hasattr(result, 'boxes') and hasattr(result.boxes, 'id') and result.boxes.id is not None:
-                    boxes = result.boxes.xyxy.cpu().numpy()  # Get boxes in xyxy format
-                    track_ids = result.boxes.id.int().cpu().numpy()  # Get track IDs
-                    confs = result.boxes.conf.cpu().numpy()  # Get confidences
-                    cls_ids = result.boxes.cls.int().cpu().numpy()  # Get class IDs
-                    
-                    # Get class names
-                    class_names = [result.names[c] for c in cls_ids]
-                    
-                    # Create simplified track objects with only what's needed
-                    for i in range(len(track_ids)):
-                        track_id = int(track_ids[i])
-                        box = boxes[i].tolist()  # [x1, y1, x2, y2]
-                        confidence = float(confs[i])
-                        class_id = int(cls_ids[i])
-                        class_name = class_names[i]
-                        
-                        # Update counters
-                        self._update_counts(track_id, class_name)
-                        
-                        # Create a simple Track object with only the needed attributes
-                        track = type('Track', (), {
-                            'track_id': track_id,
-                            'class_id': class_id,
-                            'class_name': class_name,
-                            'confidence': confidence,
-                            'box': box  # Already converted to a list
-                        })
-                        
-                        self.tracks.append(track)
-            
-            # Save current tracks for reference
-            self.current_tracks = self.tracks
-            
-            return self.tracks
-            
-        except Exception as e:
-            logger.error(f"Error in YOLO tracking: {e}")
-            return self.current_tracks
+            try:
+                # Get bounding box in [x1, y1, x2, y2] format
+                bbox = track.to_ltrb() 
+                box_list = bbox.tolist() if hasattr(bbox, 'tolist') else list(bbox)
+                
+                # Update track counters
+                self._update_counts(track.track_id, getattr(track, 'det_class', 'unknown'))
+                
+                # Create a track dictionary with all necessary fields
+                track_dict = {
+                    'track_id': int(track.track_id),
+                    'box': box_list,
+                    'confidence': float(getattr(track, 'det_conf', 1.0)),
+                    'class_name': str(getattr(track, 'det_class', 'unknown'))
+                }
+                
+                # Store the track
+                self.tracks.append(track_dict)
+            except Exception as e:
+                logger.error(f"Error formatting track: {e}")
         
+        # Save current tracks for reference
+        self.current_tracks = self.tracks
+        
+        return self.tracks
+    
     def get_results(self):
         """Get counts and other metrics."""
         return {
@@ -215,13 +219,13 @@ class YOLOTracker:
             }
         }
 
-# Alias DeepSORTTracker to YOLOTracker for backward compatibility
-DeepSORTTracker = YOLOTracker
+# For backward compatibility
+YOLOTracker = DeepSortTracker
 
 # Create a tracker function that matches the API of the AWS version
 def create_tracker(**kwargs):
-    """Create a YOLO tracker with the specified parameters."""
-    return YOLOTracker(**kwargs)
+    """Create a DeepSORT tracker with the specified parameters."""
+    return DeepSortTracker(**kwargs)
 
 # For backward compatibility with AWS version
-Tracker = YOLOTracker 
+Tracker = DeepSortTracker 
