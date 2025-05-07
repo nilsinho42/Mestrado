@@ -307,7 +307,7 @@ class VideoPipeline:
         _detectors["edge"] = edge_detector  # Add to global dict
         logger.info("Edge detector initialized for Raspberry Pi processing")
         
-    def process_video(self, video_path, job_id, providers=['azure'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
+    def process_video(self, video_path, job_id, providers=['edge'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
         """
         Process a video using detection methods and return results.
         

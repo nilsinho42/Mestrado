@@ -6,7 +6,6 @@ from typing import Dict, Any, List, Optional
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
 class Detection:
@@ -71,7 +70,7 @@ class DeepSortTracker:
         self.model_path = model_path
         
         # Initialize the DeepSORT trackers for vehicles and people
-        self.vehicle_tracker = DeepSort(embedder_gpu=False, half=False, bgr=True, n_init=n_init, max_age=max_age)
+        self.vehicle_tracker = DeepSort(embedder_gpu=False, half=False, bgr=True, n_init=4, max_age=70) 
         # For people tracking, use a specialized embedder and longer max_age
         self.people_tracker = DeepSort(embedder='torchreid', embedder_gpu=False, half=False, bgr=True, n_init=15, max_age=150)
             

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Import detector and tracker modules
 from detector import YOLODetector
-from tracker import DeepSORTTracker
+from tracker import DeepSortTracker
 
 # Create temporary directory for frames
 TEMP_DIR = Path("./tmp")
@@ -25,7 +25,7 @@ app = Flask(__name__)
 
 # Initialize detector and tracker
 detector = YOLODetector(model_path="yolov11n.pt", confidence_threshold=0.50)
-tracker = DeepSORTTracker(model_path="yolov11n.pt", max_iou_distance=0.9, max_age=70, n_init=5)
+tracker = DeepSortTracker(model_path="yolov11n.pt", max_iou_distance=0.9, max_age=70, n_init=5)
 
 # Store active tracking sessions
 tracking_sessions = {}
@@ -91,7 +91,7 @@ def track_objects():
         # Create tracking session if it doesn't exist
         if video_id not in tracking_sessions:
             tracking_sessions[video_id] = {
-                "tracker": DeepSORTTracker(model_path="yolov11n.pt", max_iou_distance=0.9, max_age=70, n_init=5),
+                "tracker": DeepSortTracker(model_path="yolov11n.pt", max_iou_distance=0.9, max_age=70, n_init=5),
                 "frames_processed": 0,
                 "last_update": time.time()
             }
