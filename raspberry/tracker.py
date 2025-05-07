@@ -158,12 +158,6 @@ class DeepSortTracker:
         if vehicle_detections:
             try:
                 vehicle_tracks = self.vehicle_tracker.update_tracks(vehicle_detections, frame=frame)
-                
-                # Explicitly set class name for vehicle tracks
-                for track in vehicle_tracks:
-                    track.det_class = 'vehicle'
-                    logger.info(f"Set track {track.track_id} det_class to 'vehicle'")
-                    
             except Exception as e:
                 logger.error(f"Error during vehicle tracker update: {e}")
         
@@ -172,12 +166,6 @@ class DeepSortTracker:
         if people_detections:
             try:
                 people_tracks = self.people_tracker.update_tracks(people_detections, frame=frame)
-                
-                # Explicitly set class name for people tracks
-                for track in people_tracks:
-                    track.det_class = 'person'
-                    logger.info(f"Set track {track.track_id} det_class to 'person'")
-                    
             except Exception as e:
                 logger.error(f"Error during people tracker update: {e}")
         
