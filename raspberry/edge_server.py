@@ -125,13 +125,13 @@ def track_objects():
         # Extract results
         tracks_result = []
         for track in tracks:
-            # Just use the track object as-is since it's simplified
+            # Access track as a dictionary since it's returned that way from DeepSortTracker.update
             tracks_result.append({
-                'track_id': track.track_id,
-                'class_id': track.class_id,
-                'class_name': track.class_name,
-                'box': track.bbox,
-                'confidence': track.confidence
+                'track_id': track['track_id'],
+                'class_id': track.get('class_id', 0),
+                'class_name': track['class_name'],
+                'box': track['box'],
+                'confidence': track['confidence']
             })
         
         session["frames_processed"] += 1
