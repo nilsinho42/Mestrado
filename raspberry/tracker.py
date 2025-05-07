@@ -159,6 +159,12 @@ class DeepSortTracker:
         if vehicle_detections:
             try:
                 vehicle_tracks = self.vehicle_tracker.update_tracks(vehicle_detections, frame=frame)
+                
+                # Explicitly set class name for vehicle tracks
+                for track in vehicle_tracks:
+                    track.det_class = 'vehicle'
+                    logger.info(f"Set track {track.track_id} det_class to 'vehicle'")
+                    
             except Exception as e:
                 logger.error(f"Error during vehicle tracker update: {e}")
         
@@ -167,6 +173,12 @@ class DeepSortTracker:
         if people_detections:
             try:
                 people_tracks = self.people_tracker.update_tracks(people_detections, frame=frame)
+                
+                # Explicitly set class name for people tracks
+                for track in people_tracks:
+                    track.det_class = 'person'
+                    logger.info(f"Set track {track.track_id} det_class to 'person'")
+                    
             except Exception as e:
                 logger.error(f"Error during people tracker update: {e}")
         
@@ -184,15 +196,18 @@ class DeepSortTracker:
                 bbox = track.to_ltrb() 
                 box_list = bbox.tolist() if hasattr(bbox, 'tolist') else list(bbox)
                 
+                # Get class name from the track - this is now explicitly set above
+                class_name = getattr(track, 'det_class')
+                
                 # Update track counters
-                self._update_counts(track.track_id, getattr(track, 'det_class', 'unknown'))
+                self._update_counts(track.track_id, class_name)
                 
                 # Create a track dictionary with all necessary fields
                 track_dict = {
                     'track_id': int(track.track_id),
                     'box': box_list,
                     'confidence': float(getattr(track, 'det_conf', 1.0)),
-                    'class_name': str(getattr(track, 'det_class', 'unknown'))
+                    'class_name': str(class_name)
                 }
                 
                 # Store the track
