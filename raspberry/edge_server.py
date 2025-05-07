@@ -112,13 +112,15 @@ def track_objects():
             logger.error(f"Error decoding image: {e}")
             return jsonify({"error": f"Invalid image format: {str(e)}"}), 400
         
-        # We ignore provided detections in YOLO mode since YOLO does its own detection
-        # Track objects using the session tracker (which now uses YOLO)
+        # Extract detections from the request data
+        detections = data.get('detections', [])
+        
+        # Get session tracker and pass the detections
         session = tracking_sessions[video_id]
         session_tracker = session["tracker"]
         
-        # Track objects - with YOLO we only need to pass the frame
-        tracks = session_tracker.update([], frame=img)
+        # Pass the detections to tracker instead of empty list
+        tracks = session_tracker.update(detections, frame=img)
         
         # Extract results
         tracks_result = []
