@@ -72,7 +72,7 @@ def convert_detection(detection: Detection, provider: str) -> dict:
     result = {
         'confidence': detection.confidence,
         'class_id': detection.class_id if detection.class_id is not None else 0,
-        'class_name': detection.class_name
+        'class_name': standardize_class_name(detection.class_name)
     }
 
     # Each provider's detector returns bounding boxes in different formats:
@@ -329,7 +329,13 @@ class VideoPipeline:
         for det in detections:
             # Check if we have 'bbox' or 'box' key
             box_key = 'box' if 'box' in det else 'bbox'
-            
+
+            class_name = det['class_name']
+            if class_name == 'vehicle':
+                min_box_size_threshold = 0.10
+            elif class_name == 'person':
+                min_box_size_threshold = 0.05
+                
             box_width = det[box_key][2] - det[box_key][0]
             box_height = det[box_key][3] - det[box_key][1]
             if box_width <= 0 or box_height <= 0:
@@ -440,29 +446,6 @@ class VideoPipeline:
                 }
                 
                 frame_results.append(result)
-
-                if detections:
-                    # Create Detection objects and standardize class names
-                    standardized_detections = []
-                    for d in detections:
-                        # Standardize the class name
-                        std_class_name = standardize_class_name(d.get('class_name', ''))
-                        
-                        # Only keep detections that match our standard categories
-                        if std_class_name:
-                            # Create a copy of the detection with standardized class name
-                            std_detection = d.copy()
-                            std_detection['class_name'] = std_class_name
-                            standardized_detections.append(std_detection)
-                    
-                    # Replace original detections with standardized ones
-                    detections = standardized_detections
-                    
-                    # Skip if no valid detections remain after standardization
-                    if not detections:
-                        continue
-                else:
-                    continue 
 
                 tracking_time = time.time()
 
