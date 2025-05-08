@@ -44,3 +44,5 @@ uploads/
 cloud/gcp/dulcet-voyager-316217-4413d1f83430.json
 ml/test*
 videos
+ml/core/__pycache__/
+ml/__pycache__/

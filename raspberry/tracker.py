@@ -69,9 +69,9 @@ class DeepSortTracker:
         self.model_path = model_path
         
         # Initialize the DeepSORT trackers for vehicles and people
-        self.vehicle_tracker = DeepSort(embedder_gpu=False, half=False, bgr=True, n_init=4, max_age=70) 
+        self.vehicle_tracker = DeepSort(embedder_gpu=False, half=False, bgr=True, n_init=4, max_age=100, nn_budget=200, max_cosine_distance=0.7, max_iou_distance=0.7) 
         # For people tracking, use a specialized embedder and longer max_age
-        self.people_tracker = DeepSort(embedder='torchreid', embedder_gpu=False, half=False, bgr=True, n_init=15, max_age=150)
+        self.people_tracker = DeepSort(embedder='torchreid', embedder_gpu=False, half=False, bgr=True, n_init=15, max_age=150, nn_budget=200, max_cosine_distance=0.7, max_iou_distance=0.7) 
             
         # Initialize counters for metrics
         self.vehicle_count = 0
@@ -193,7 +193,7 @@ class DeepSortTracker:
                 track_dict = {
                     'track_id': int(track.track_id),
                     'box': box_list,
-                    'confidence': float(getattr(track, 'det_conf', 1.0)),
+                    'confidence': float(getattr(track, 'det_conf', 1.0) if getattr(track, 'det_conf', 1.0) is not None else 1.0),
                     'class_name': str(class_name)
                 }
                 

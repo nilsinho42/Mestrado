@@ -16,6 +16,7 @@ import datetime
 from typing import Dict, Any, List, Optional
 import threading
 import queue
+import cv2
 
 # Load environment variables from root directory
 from dotenv import load_dotenv
@@ -91,7 +92,7 @@ def convert_detection(detection: Detection, provider: str) -> dict:
         x2 = x1 + box_data['w']
         y2 = y1 + box_data['h']
     else:  # aws, gcp, or edge
-        # Convert from [x1, y1, x2, y2] to [x, y, w, h]
+        # Already in [x1, y1, x2, y2] format
         x1, y1, x2, y2 = detection.bbox
 
     result.update({'box': [x1, y1, x2, y2]})
@@ -158,9 +159,6 @@ def process_response(response: requests.Response, tracking_data: dict) -> dict:
         logger.info(f"Invalid tracks format: {resp_data['tracks']}")
         return tracking_data
 
-    # Set a minimum box size threshold (as a fraction of image dimensions)
-    # Boxes smaller than this percentage of the frame will be ignored
-    min_box_size_threshold = 0.10  # 1% of frame size
 
     tracks = resp_data.get('tracks', [])
     for track in tracks:
@@ -170,31 +168,41 @@ def process_response(response: requests.Response, tracking_data: dict) -> dict:
         # Get the box dimensions
         box = track.get('box')
         
-        # Calculate box area (width * height)
-        # For [x1, y1, x2, y2] format
-        box_width = box[2] - box[0]
-        box_height = box[3] - box[1]
+        # # Calculate box area (width * height)
+        # # For [x1, y1, x2, y2] format
+        # box_width = box[2] - box[0]
+        # box_height = box[3] - box[1]
             
-        # Skip invalid dimensions
-        if box_width <= 0 or box_height <= 0:
-            logger.warning(f"Invalid box dimensions: width={box_width}, height={box_height}")
-            continue
+        # # Skip invalid dimensions
+        # if box_width <= 0 or box_height <= 0:
+        #     logger.warning(f"Invalid box dimensions: width={box_width}, height={box_height}")
+        #     continue
                 
-        box_size = box_width * box_height
+        # box_size = box_width * box_height
             
-        # Skip small boxes
-        if box_size < min_box_size_threshold:
-            continue
+        # # Skip small boxes
+        # if box_size < min_box_size_threshold:
+        #     continue
         
         # The class_name should already be standardized, so we can do direct comparison
         if class_name == 'vehicle':
             if track_id not in tracking_data['tracked_ids']['vehicle']:
                 tracking_data['tracked_ids']['vehicle'].add(track_id)
                 tracking_data['vehicle_count'] += 1
+                # Store latest detection data with class name
+                tracking_data['latest_detection'] = {
+                    'box': [box[0], box[1], box[2], box[3]],
+                    'class_name': 'vehicle'
+                }
         elif class_name == 'person':
             if track_id not in tracking_data['tracked_ids']['person']:
                 tracking_data['tracked_ids']['person'].add(track_id)
                 tracking_data['person_count'] += 1
+                # Store latest detection data with class name
+                tracking_data['latest_detection'] = {
+                    'box': [box[0], box[1], box[2], box[3]],
+                    'class_name': 'person'
+                }
     
     return tracking_data
 
@@ -307,6 +315,36 @@ class VideoPipeline:
         _detectors["edge"] = edge_detector  # Add to global dict
         logger.info("Edge detector initialized for Raspberry Pi processing")
         
+    def _filter_out_small_detections(self, detections, frame=None):
+        """Filter out detections that are too small."""
+        # Set a minimum box size threshold (as a fraction of image dimensions)
+        # Boxes smaller than this percentage of the frame will be ignored
+        min_box_size_threshold = 0.01  # 1% of frame size
+        
+        # If we have frame, use its dimensions
+        frame_height, frame_width = frame.shape[:2]
+        frame_area = frame_width * frame_height
+        
+        filtered_detections = []    
+        for det in detections:
+            # Check if we have 'bbox' or 'box' key
+            box_key = 'box' if 'box' in det else 'bbox'
+            
+            box_width = det[box_key][2] - det[box_key][0]
+            box_height = det[box_key][3] - det[box_key][1]
+            if box_width <= 0 or box_height <= 0:
+                continue
+                
+            box_size = box_width * box_height
+            relative_size = box_size / frame_area  # Normalize by frame size
+            
+            if relative_size < min_box_size_threshold:
+                continue
+                
+            filtered_detections.append(det)
+
+        return filtered_detections
+    
     def process_video(self, video_path, job_id, providers=['edge'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
         """
         Process a video using detection methods and return results.
@@ -369,7 +407,8 @@ class VideoPipeline:
                 'tracked_ids': {
                     'vehicle': set(),  # Set of unique vehicle IDs
                     'person': set()    # Set of unique person IDs
-                }
+                },
+                'latest_detection': None  # Will store the most recent detection with box and class_name
             }
 
             # Process each frame    
@@ -384,6 +423,14 @@ class VideoPipeline:
                     image_path=frame_path,
                     provider=provider
                 )
+                if detections:
+                    detections = [convert_detection(Detection(**det, frame_number=frame_number), provider) for det in detections]
+                    detections = self._filter_out_small_detections(detections, frame)
+                else:
+                    continue
+
+                if not detections:
+                    continue
 
                 # Add frame info to results
                 result = {
@@ -403,9 +450,10 @@ class VideoPipeline:
                         
                         # Only keep detections that match our standard categories
                         if std_class_name:
-                            # Update the detection with standardized class name
-                            d['class_name'] = std_class_name
-                            standardized_detections.append(Detection(**d, frame_number=frame_number))
+                            # Create a copy of the detection with standardized class name
+                            std_detection = d.copy()
+                            std_detection['class_name'] = std_class_name
+                            standardized_detections.append(std_detection)
                     
                     # Replace original detections with standardized ones
                     detections = standardized_detections
@@ -429,7 +477,7 @@ class VideoPipeline:
                     payload = {
                         "image": encoded_image,
                         "frame_idx": frame_number,
-                        "detections": [convert_detection(det, provider) for det in detections],
+                        "detections": detections,
                         "video_id": job_id,
                         "provider": provider
                     }
@@ -459,7 +507,7 @@ class VideoPipeline:
                     payload = {
                         "image": encoded_image,
                         "frame_idx": frame_number,
-                        "detections": [convert_detection(det, provider) for det in detections],
+                        "detections": detections,
                         "video_id": job_id,
                         "provider": provider
                     }
@@ -489,7 +537,7 @@ class VideoPipeline:
                     payload = {
                         "image": encoded_image,
                         "frame_idx": frame_number,
-                        "detections": [convert_detection(det, provider) for det in detections],
+                        "detections": detections,
                         "video_id": job_id,
                         "provider": provider
                     }
@@ -519,7 +567,7 @@ class VideoPipeline:
                     payload = {
                         "image": encoded_image,
                         "frame_idx": frame_number,
-                        "detections": [convert_detection(det, provider) for det in detections],
+                        "detections": detections,
                         "video_id": job_id,
                         "provider": provider
                     }
@@ -555,7 +603,23 @@ class VideoPipeline:
                     })
                     
                 # Process the response
+                previous_tracking_count = tracking_data['vehicle_count'] + tracking_data['person_count']
                 tracking_data = process_response(response, tracking_data)
+                new_tracking_count = tracking_data['vehicle_count'] + tracking_data['person_count']
+                if new_tracking_count > previous_tracking_count and provider == 'edge' and tracking_data['latest_detection']:
+                    latest_detection = tracking_data['latest_detection']
+                    box = latest_detection['box']
+                    # add detections to the frame
+                    cv2.rectangle(frame, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), (0, 0, 255), 2)
+                    class_name = latest_detection['class_name']
+                    # save the frame to [output_dir]/tracked/frame_[provider]_[frame_number].jpg
+                    recangle_str = f"x1_{int(box[0])}__y1_{int(box[1])}__x2_{int(box[2])}__y2_{int(box[3])}"
+                    frame_filename = f"{provider}_{frame_number:04d}_{recangle_str}.jpg"
+                    tracked_dir = Path(output_dir) / "tracked"
+                    tracked_dir.mkdir(exist_ok=True)
+                    frame_path = os.path.join(tracked_dir, frame_filename)
+                    cv2.imwrite(frame_path, frame)
+
                 logger.info(f"[{provider}][{image_id}] Vehicle count: {tracking_data['vehicle_count']}. Person count: {tracking_data['person_count']}.")
 
             # Get the tracking counts directly from tracking_data

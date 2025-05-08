@@ -1,0 +1,54 @@
+# Version control
+.git
+.gitignore
+.github
+
+# Environment files
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Large data directories
+data/
+uploads/
+videos/
+tmp/
+
+# Node modules for frontend
+node_modules/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker files
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Other unnecessary files
+.DS_Store
+*.md
+LICENSE 
