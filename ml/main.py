@@ -334,7 +334,7 @@ class VideoPipeline:
             if class_name == 'vehicle':
                 min_box_size_threshold = 0.07
             elif class_name == 'person':
-                min_box_size_threshold = 0.03
+                min_box_size_threshold = 0.02
                 
             box_width = det[box_key][2] - det[box_key][0]
             box_height = det[box_key][3] - det[box_key][1]
