@@ -71,7 +71,7 @@ class DeepSortTracker:
         # Initialize the DeepSORT trackers for vehicles and people
         self.vehicle_tracker = DeepSort(embedder_gpu=False, half=False, bgr=True, n_init=4, max_age=100, nn_budget=150, max_cosine_distance=0.7, max_iou_distance=0.7) 
         # For people tracking, use a specialized embedder and longer max_age
-        self.people_tracker = DeepSort(embedder='torchreid', embedder_gpu=False, half=False, bgr=True, n_init=10, max_age=150)
+        self.people_tracker = DeepSort(embedder='torchreid', embedder_gpu=False, half=False, bgr=True, n_init=8, max_age=150)
             
         # Initialize counters for metrics
         self.vehicle_count = 0
