@@ -351,7 +351,7 @@ class VideoPipeline:
 
         return filtered_detections
     
-    def process_video(self, video_path, job_id, providers=['edge'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
+    def process_video(self, video_path, job_id, providers=['edge', 'aws', 'azure', 'gcp'], expected_vehicles=0, expected_people=0): #'edge', 'aws', 'azure', 'gcp'
         """
         Process a video using detection methods and return results.
         
@@ -589,7 +589,7 @@ class VideoPipeline:
                 previous_tracking_count = tracking_data['vehicle_count'] + tracking_data['person_count']
                 tracking_data = process_response(response, tracking_data)
                 new_tracking_count = tracking_data['vehicle_count'] + tracking_data['person_count']
-                if new_tracking_count > previous_tracking_count and provider == 'edge' and tracking_data['latest_detection']:
+                if new_tracking_count > previous_tracking_count and tracking_data['latest_detection']:
                     latest_detection = tracking_data['latest_detection']
                     box = latest_detection['box']
                     # add detections to the frame

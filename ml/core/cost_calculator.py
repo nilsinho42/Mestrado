@@ -18,28 +18,29 @@ logger = logging.getLogger(__name__)
 def get_aws_metrics(start_time: datetime,
                     end_time: datetime) -> Dict[str, float]:
     """
-    Retrieve AWS ECS/Fargate CPU and memory metrics from CloudWatch.
+    Retrieve AWS App Runner CPU and memory metrics from CloudWatch.
     Returns vCPU-seconds and memory-GB-seconds.
     """
-    # Standard Fargate config
+    # Standard App Runner configuration
     vcpu_count = 2
     memory_gb = 4
 
     region = "us-east-2"
-    cluster_name = "deepsort-cluster"
-    service_name = "meu-servico-mestrado"
+    service_name = "mestrado-3"
+    service_id = "145e4323694f445eb2f4d758974f1ed3"  # App Runner service ID from CloudWatch
 
     cloudwatch = boto3.client("cloudwatch", region_name=region)
 
     start_time = start_time - timedelta(hours=1)
     total_seconds = (end_time - start_time).total_seconds()
 
+    # Get CPU metrics for App Runner using both ServiceName and ServiceID dimensions
     response = cloudwatch.get_metric_statistics(
-        Namespace="AWS/ECS",
+        Namespace="AWS/AppRunner",
         MetricName="CPUUtilization",
         Dimensions=[
-            {"Name": "ClusterName", "Value": cluster_name},
             {"Name": "ServiceName", "Value": service_name},
+            {"Name": "ServiceID", "Value": service_id},
         ],
         StartTime=start_time,
         EndTime=end_time,
@@ -48,19 +49,22 @@ def get_aws_metrics(start_time: datetime,
     )
 
     datapoints = response.get("Datapoints", [])
+    
     if datapoints:
-        print(f"CPU Utilization Retrieved {len(datapoints)} datapoints:")
+        logger.info(f"CPU Utilization Retrieved {len(datapoints)} datapoints")
         avg_cpu = sum(dp["Average"] for dp in datapoints) / len(datapoints)
         vcpu_seconds = (avg_cpu / 100.0) * vcpu_count * total_seconds
     else:
+        logger.warning("No CPU metrics found for AWS App Runner service")
         vcpu_seconds = 0
 
+    # Get Memory metrics for App Runner using both ServiceName and ServiceID dimensions
     response = cloudwatch.get_metric_statistics(
-        Namespace="AWS/ECS",
+        Namespace="AWS/AppRunner",
         MetricName="MemoryUtilization",
         Dimensions=[
-            {"Name": "ClusterName", "Value": cluster_name},
             {"Name": "ServiceName", "Value": service_name},
+            {"Name": "ServiceID", "Value": service_id},
         ],
         StartTime=start_time,
         EndTime=end_time,
@@ -70,10 +74,11 @@ def get_aws_metrics(start_time: datetime,
     datapoints = response.get("Datapoints", [])
 
     if datapoints:
-        print(f"Memory Utilization Retrieved {len(datapoints)} datapoints:")
+        logger.info(f"Memory Utilization Retrieved {len(datapoints)} datapoints")
         avg_mem = sum(dp["Average"] for dp in datapoints) / len(datapoints)
         memory_gb_seconds = (avg_mem / 100.0) * memory_gb * total_seconds
     else:
+        logger.warning("No memory metrics found for AWS App Runner service")
         memory_gb_seconds = 0
 
     return {
@@ -348,7 +353,7 @@ class CostCalculator:
     
     def _calculate_aws_cost(self, frame_count: int, cloud_metrics: Dict[str, Any]) -> float:
         """
-        Calculate AWS cost based on cloud metrics.
+        Calculate AWS App Runner cost based on cloud metrics.
         
         Args:
             frame_count: Number of frames processed
@@ -362,25 +367,38 @@ class CostCalculator:
         
         # Validate required metrics
         if not cloud_metrics or 'vcpu_seconds' not in cloud_metrics or 'memory_gb_seconds' not in cloud_metrics:
-            logger.warning("Missing required cloud metrics for AWS cost calculation")
+            logger.warning("Missing required cloud metrics for AWS App Runner cost calculation")
             return 0.0
             
         # Image detection cost
         detection_cost = frame_count * aws_config.get('image_detection_per_image', 0.001)
         
-        # Compute costs (AWS Fargate)
+        # Get metrics
         vcpu_seconds = cloud_metrics.get('vcpu_seconds', 0)
         memory_gb_seconds = cloud_metrics.get('memory_gb_seconds', 0)
         
-        compute_cost = (
-            vcpu_seconds * aws_config.get('vCPU_per_sec', 0.00001124) +
-            memory_gb_seconds * aws_config.get('memory_per_GB_sec', 0.00000124)
-        )
+        # Convert seconds to hours
+        vcpu_hours = vcpu_seconds / 3600
+        memory_gb_hours = memory_gb_seconds / 3600
         
-        # Total cost
+        # App Runner pricing components
+        active_vcpu_per_hour = aws_config.get('active_vcpu_per_hour', 0.064)  # $0.064 per vCPU-hour
+        memory_per_gb_hour = aws_config.get('memory_per_gb_hour', 0.007)     # $0.007 per GB-hour
+        
+        # Calculate active compute costs
+        active_vcpu_cost = vcpu_hours * active_vcpu_per_hour
+        memory_cost = memory_gb_hours * memory_per_gb_hour
+        
+        # Total compute cost
+        compute_cost = active_vcpu_cost + memory_cost
+        
+        # Total cost (compute + detection)
         total_cost = detection_cost + compute_cost
         
-        logger.info(f"AWS Cost Calculation - Detection: ${detection_cost:.4f}, Compute: ${compute_cost:.4f}, Total: ${total_cost:.4f}")
+        logger.info(f"AWS App Runner Cost Calculation - Detection: ${detection_cost:.4f}, Compute: ${compute_cost:.4f}, "
+                    f"Total: ${total_cost:.4f}")
+        logger.debug(f"AWS App Runner Details - Active vCPU hours: {vcpu_hours:.4f} (${active_vcpu_cost:.4f}), "
+                     f"Memory GB hours: {memory_gb_hours:.4f} (${memory_cost:.4f})")
         
         return total_cost
         
