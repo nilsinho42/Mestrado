@@ -315,7 +315,7 @@ class VideoPipeline:
         _detectors["edge"] = edge_detector  # Add to global dict
         logger.info("Edge detector initialized for Raspberry Pi processing")
         
-    def _filter_out_small_detections(self, detections, frame=None):
+    def _filter_out_small_detections(self, detections, provider, frame=None):
         """Filter out detections that are too small."""
         # Set a minimum box size threshold (as a fraction of image dimensions)
         # Boxes smaller than this percentage of the frame will be ignored
@@ -332,7 +332,10 @@ class VideoPipeline:
 
             class_name = det['class_name']
             if class_name == 'vehicle':
-                min_box_size_threshold = 0.07
+                if provider == 'edge':
+                    min_box_size_threshold = 0.07
+                else:
+                    min_box_size_threshold = 0.04
             elif class_name == 'person':
                 min_box_size_threshold = 0.01
                 
@@ -385,7 +388,11 @@ class VideoPipeline:
             if not frame_paths:
                 logger.warning(f"No frames found for video {video_path}")
                 return None
-                
+            else:
+                logger.info("Finished frame extraction.")
+        except Exception as e:
+            logger.error(f"Error processing video {video_path}: {e}")
+            return None
         finally:
             # Restore the original output directory
             self.image_processor.output_dir = original_output_dir
@@ -399,7 +406,7 @@ class VideoPipeline:
         count_people = {'video_id': job_id, 'frames': len(frame_paths), 'cp_expected': expected_people}
         precision_recall = {'video_id': job_id, 'frames': len(frame_paths)}
         cost_metrics = {'video_id': job_id, 'frames': len(frame_paths)}
-
+        logger.info("Starting processing... ")
         for provider in providers:
             logger.info(f"Processing frames with {provider} provider")
             processing_time = time.time()
@@ -431,7 +438,7 @@ class VideoPipeline:
                 )
                 if detections:
                     detections = [convert_detection(Detection(**det, frame_number=frame_number), provider) for det in detections]
-                    detections = self._filter_out_small_detections(detections, frame)
+                    detections = self._filter_out_small_detections(detections, provider, frame)
                 else:
                     continue
 

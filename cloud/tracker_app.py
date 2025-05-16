@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # Create FastAPI app
 app = FastAPI(
     title="Cloud YOLO Tracking API", 
-    version="1.0.0",
+    version="2.0.0",
     description="API for object tracking using Ultralytics YOLO",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -288,7 +288,7 @@ async def root():
     """Root endpoint, provides basic information about the API."""
     return {
         "message": "Cloud YOLO Tracking API",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "docs": "/docs",
         "model": "yolo11n.pt",
         "tracker": "botsort.yaml",
@@ -325,14 +325,14 @@ async def track_objects(data: ImageData):
             tracker_params = {
                 'azure': {
                     'vehicle': {
-                        'n_init': 2, 
-                        'max_age': 100, 
+                        'n_init': 3, 
+                        'max_age': 70, 
                         'embedder_gpu': False, 
                         'half': False, 
                         'bgr': True,
-                        'nn_budget': 250,  # Highest budget since Azure detects fewest vehicles
-                        'max_cosine_distance': 0.8,  # Most relaxed setting to catch more vehicles
-                        'max_iou_distance': 0.9  # Most relaxed spatial matching for Azure
+                        'nn_budget': 300,  # Highest budget since Azure detects fewest vehicles
+                        'max_cosine_distance': 0.4,  # Most relaxed setting to catch more vehicles
+                        'max_iou_distance': 0.7  # Most relaxed spatial matching for Azure
                     },
                     'people': {
                         'n_init': 15, 
@@ -346,12 +346,12 @@ async def track_objects(data: ImageData):
                 'aws': {
                     'vehicle': {
                         'n_init': 3, 
-                        'max_age': 90, 
+                        'max_age': 70, 
                         'embedder_gpu': False, 
                         'half': False, 
                         'bgr': True,
                         'nn_budget': 200,  # High budget to help close the gap from 14 to 18
-                        'max_cosine_distance': 0.75,  # More relaxed to catch additional vehicles
+                        'max_cosine_distance': 0.5,  # More relaxed to catch additional vehicles
                         'max_iou_distance': 0.8  # More relaxed for more detection in AWS
                     },
                     'people': {
@@ -365,14 +365,14 @@ async def track_objects(data: ImageData):
                 },
                 'gcp': {
                     'vehicle': {
-                        'n_init': 3, 
-                        'max_age': 120, 
+                        'n_init': 4, 
+                        'max_age': 170, 
                         'embedder_gpu': False, 
                         'half': False, 
                         'bgr': True,
-                        'nn_budget': 150,  # Lower budget since GCP is already close to expected count
-                        'max_cosine_distance': 0.7,  # Moderately relaxed to detect the last vehicle
-                        'max_iou_distance': 0.7  # Standard value - already performing well
+                        'nn_budget': 250,  # Lower budget since GCP is already close to expected count
+                        'max_cosine_distance': 0.85,  # Moderately relaxed to detect the last vehicle
+                        'max_iou_distance': 0.75  # Standard value - already performing well
                     },
                     'people': {
                         'n_init': 10, 

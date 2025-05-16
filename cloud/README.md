@@ -2,6 +2,11 @@
 
 This module provides a FastAPI application that implements object tracking using Ultralytics YOLO. It's optimized for processing videos frame-by-frame, maintaining object identities across frames.
 
+- docker build -t nperes/deepsort-tracker:latest .
+- docker push nperes/deepsort-tracker:latest
+- docker tag nperes/deepsort-tracker:latest public.ecr.aws/v3x5y9w4/ntp/mestrado:latest
+- docker push public.ecr.aws/v3x5y9w4/ntp/mestrado:latest
+
 ## Features
 
 - Uses Ultralytics YOLO11n model for detection and tracking

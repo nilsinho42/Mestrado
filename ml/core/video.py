@@ -170,8 +170,6 @@ class VideoProcessor:
             - List of paths to saved frames (if save_frames=True)
             - Dictionary with video info (fps, frame count, etc.)
         """
-        frames = []
-        frame_paths = []
         
         # Detect rotation from video metadata
         rotation = get_video_rotation(video_path)
@@ -184,14 +182,13 @@ class VideoProcessor:
             raise ValueError(f"Could not open video file: {video_path}")
         
         # Get video properties
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        reported_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         original_fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        duration = total_frames / original_fps if original_fps > 0 else 0
+        duration = reported_total_frames / original_fps if original_fps > 0 else 0
         
-        if total_frames == 0:
-            raise ValueError(f"No frames found in video: {video_path}")
+        logger.info(f"Video properties: Reported frames: {reported_total_frames}, FPS: {original_fps}, Size: {width}x{height}, Duration: {duration:.2f}s")
         
         # Create a subfolder based on video filename
         video_name = Path(video_path).stem
@@ -199,32 +196,60 @@ class VideoProcessor:
         frames_dir.mkdir(exist_ok=True)
         
         try:
+            # Reset to the beginning of the file and read sequentially
+            logger.info("Setting video to start position")
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            
             frame_count = 0
-
-            while frame_count < total_frames:
-                # Set frame position
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count)
-                ret, frame = cap.read()
-                
-                if ret:
+            
+            while True:
+                try:
+                    # Read the next frame
+                    ret, frame = cap.read()
+                    
+                    if not ret:
+                        # End of file reached
+                        if frame_count > 0:
+                            logger.info(f"Reached end of file after {frame_count} frames")
+                            break
+                    
                     # Apply rotation correction if needed
                     if rotation != 0:
                         frame = apply_rotation(frame, rotation)
                     
-                    # Save frame to the output directory with a timestamp
+                    # Save frame to the output directory
                     frame_filename = f"{video_name}_frame_{frame_count:04d}.jpg"
-
                     frame_path = str(frames_dir / frame_filename)
-                    cv2.imwrite(frame_path, frame)
-                    frame_paths.append(frame_path)
-
-                    frames.append(frame)
+                    
+                    # Ensure the frame is valid before saving
+                    if frame is not None and frame.size > 0:
+                        logger.info(f"Saving frame {frame_count} to {frame_path}")
+                        try:
+                            cv2.imwrite(frame_path, frame)
+                        except Exception as e:
+                            logger.warning(f"Error saving frame {frame_count}: {str(e)}")
+                    else:
+                        logger.warning(f"Skipping invalid frame at position {frame_count}")
+                    
+                    # Move to next frame
+                    frame_count += 1
                 
-                # Move to next frame
-                frame_count += 1
+                except Exception as e:
+                    logger.warning(f"Error reading frame {frame_count}: {str(e)}")
+                    # Skip problematic frame and continue
+                    frame_count += 1
+                    
+            # If we couldn't read any frames, that's an error
+            if frame_count == 0:
+                logger.error(f"No frames were extracted from video: {video_path}")
+                raise ValueError(f"No frames could be extracted from video: {video_path}")
+            
+            # Update total frames to what we actually read
+            total_frames = frame_count
             
             video_info = {
                 "total_frames": total_frames,
+                "reported_total_frames": reported_total_frames,
                 "fps": original_fps,
                 "duration": duration,
                 "width": width,
@@ -233,11 +258,12 @@ class VideoProcessor:
                 "video_name": Path(video_path).stem,
                 "rotation": rotation
             }
-
+            
+            logger.info(f"Successfully extracted {total_frames} frames from video")
             if rotation != 0:
                 logger.info(f"Applied {rotation} degree rotation correction to frames")
             
-            return frames, frame_paths, video_info
+            return video_info
             
         except Exception as e:
             logger.error(f"Error extracting frames: {str(e)}")
